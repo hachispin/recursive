@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
+from itertools import product
 import math
 import shutil
 from pathlib import Path
@@ -14,6 +16,7 @@ from fontTools.otlLib.builder import (
     SingleSubstBuilder,
 )
 from fontTools.ttLib import TTFont
+from fontTools.ttLib.tables import otTables
 from fontTools.varLib.featureVars import buildFeatureRecord, sortFeatureList
 
 
@@ -27,7 +30,7 @@ DEFAULT_SOURCE_DIR = (
 )
 DEFAULT_OUTPUT = HERE / "dist"
 FAMILY = "Recursive Duo Sans"
-BUILD_VERSION = "1.088"
+BUILD_VERSION = "1.090"
 WEIGHTS = {
     300: "Light",
     400: "Regular",
@@ -96,6 +99,47 @@ def add_time_colons(font: TTFont) -> None:
             language.FeatureCount = len(language.FeatureIndex)
     gsub.FeatureList.FeatureCount = len(records)
     # OpenType requires sorted feature tags; remap all language references too.
+    sortFeatureList(gsub)
+
+
+def configure_italic_f(font: TTFont) -> None:
+    """Keep plain f as the default, with the swash and ligatures opt-in."""
+    gsub = font["GSUB"].table
+    if any(r.FeatureTag == "ss13" for r in gsub.FeatureList.FeatureRecord):
+        raise ValueError("The italic source already uses ss13")
+    params = otTables.FeatureParamsStylisticSet()
+    params.Version = 0
+    params.UINameID = font["name"].addName("Italic fi/ffi ligatures")
+    ligature_indices = set()
+    for record in gsub.FeatureList.FeatureRecord:
+        if record.FeatureTag == "ss03":
+            set_name(font, record.Feature.FeatureParams.UINameID, "Swash f")
+            for index in record.Feature.LookupListIndex:
+                for subtable in gsub.LookupList.Lookup[index].SubTable:
+                    # Use the existing swash with its own spacing and mark anchors.
+                    for name in ("f", "f.mono", "f.simple"):
+                        subtable.mapping[name] = "f.italic"
+        elif record.FeatureTag == "liga":
+            # liga is normally enabled by shapers; ss13 is explicitly opt-in.
+            record.FeatureTag = "ss13"
+            record.Feature.FeatureParams = deepcopy(params)
+            ligature_indices.update(record.Feature.LookupListIndex)
+
+    # Allow explicitly requested ligatures with the plain and alternate forms.
+    # Keep the source's longer-first rule order so ffi takes priority over fi.
+    f_forms = ("f", "f.italic", "f.simple")
+    for index in ligature_indices:
+        for subtable in gsub.LookupList.Lookup[index].SubTable:
+            original_rules = subtable.ligatures["f"]
+            for first in f_forms:
+                rules = []
+                for original in original_rules:
+                    choices = [f_forms if name == "f" else (name,) for name in original.Component]
+                    for components in product(*choices):
+                        rule = deepcopy(original)
+                        rule.Component = list(components)
+                        rules.append(rule)
+                subtable.ligatures[first] = rules
     sortFeatureList(gsub)
 
 
@@ -197,6 +241,8 @@ def update_metadata(font: TTFont, weight: int, italic: bool) -> None:
 def build_face(source_dir: Path, output: Path, weight: int, italic: bool) -> tuple[Path, Path]:
     source_path = source_dir / SOURCE_FILES[weight][1 if italic else 0]
     font = TTFont(source_path, recalcTimestamp=False, lazy=False)
+    if italic:
+        configure_italic_f(font)
     add_time_colons(font)
     update_metadata(font, weight, italic)
     suffix = "Italic" if italic else ""
@@ -222,6 +268,10 @@ def validate_face(path: Path, source_path: Path, weight: int, italic: bool) -> N
         assert bool(font["head"].macStyle & 2) == italic
         assert font["post"].isFixedPitch == 0
         if italic:
+            assert font.getBestCmap()[ord("f")] == "f"
+            assert "liga" not in {
+                record.FeatureTag for record in font["GSUB"].table.FeatureList.FeatureRecord
+            }
             # The cursive a/g must live in the base glyphs. This deliberately
             # avoids relying on the rvrn feature, which some desktop apps skip.
             for glyph_name in ("a", "g"):

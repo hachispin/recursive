@@ -13,7 +13,7 @@ from build import DEFAULT_SOURCE_DIR, WEIGHTS, build_face, validate_face
 
 
 @unittest.skipUnless(shutil.which("hb-shape"), "HarfBuzz hb-shape is required")
-class TimeColonTests(unittest.TestCase):
+class DuoSansTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         temporary = tempfile.TemporaryDirectory(prefix="recursive-duo-sans-test-")
@@ -111,11 +111,69 @@ class TimeColonTests(unittest.TestCase):
                 options = ("--script=Latn", f"--language={language}")
                 with self.subTest(face=path.name, language=language):
                     self.assert_centered(path, "12:34:56", options=options)
-                    text = "L·l ij́ fi Șș Ţţ"
+                    text = "L·l ij́ fi ffi Șș Ţţ"
+                    features = "ss13=1" if path.name.endswith("Italic.ttf") else ""
                     self.assertEqual(
-                        self.shape(path, text, options=options),
+                        self.shape(path, text, features, options),
                         self.shape(source, text, options=options),
                     )
+                    if path.name.endswith("Italic.ttf"):
+                        self.assertEqual(self.shape(path, "f", "ss03=1", options)[0]["g"], "f.italic")
+
+    def test_plain_f_is_the_italic_default_and_ss03_enables_swash(self):
+        text = "f of off coffee fluffy fi ffi fifty office gf pf yf"
+        alternates = ",".join(f"aalt[{i}]=3" for i, char in enumerate(text) if char == "f")
+        for path, source in self.faces:
+            if not path.name.endswith("Italic.ttf"):
+                continue
+            expected = self.shape(source, text, "liga=0")
+            for features in ("", "calt=0", "liga=0", "liga=1", "dlig=1"):
+                with self.subTest(face=path.name, features=features):
+                    self.assertEqual(self.shape(path, text, features), expected)
+            for features in ("ss03=1", "ss03=1,liga=1"):
+                with self.subTest(face=path.name, features=features):
+                    self.assertEqual(
+                        self.shape(path, text, features), self.shape(source, text, f"liga=0,{alternates}")
+                    )
+            # Plain f remains the default without any OpenType shaping at all.
+            shaped = self.shape(path, "f", options=("--shapers=fallback",))
+            self.assertEqual(shaped[0]["g"], "f")
+
+    def test_italic_ligatures_require_ss13(self):
+        text = "fi ffi f of office fifty"
+        for path, source in self.faces:
+            if not path.name.endswith("Italic.ttf"):
+                continue
+            with self.subTest(face=path.name):
+                original = self.shape(source, text)
+                expected = [dict(glyph) for glyph in original]
+                for glyph in expected:
+                    if glyph["g"] == "f":
+                        glyph["g"] = "f.italic"
+                self.assertEqual(self.shape(path, text, "ss13=1"), original)
+                self.assertEqual(self.shape(path, text, "ss03=1,ss13=1"), expected)
+                for features in ("", "liga=1", "ss03=1", "dlig=1"):
+                    glyphs = self.shape(path, "fi ffi", features)
+                    self.assertFalse({"uniFB01", "f_f_i"}.intersection(g["g"] for g in glyphs))
+
+    def test_both_f_forms_preserve_accent_positioning(self):
+        text = "f́ f̣ f̨"
+        alternates = ",".join(f"aalt[{i}]=3" for i, char in enumerate(text) if char == "f")
+        for path, source in self.faces:
+            if not path.name.endswith("Italic.ttf"):
+                continue
+            with self.subTest(face=path.name):
+                self.assertEqual(self.shape(path, text), self.shape(source, text))
+                self.assertEqual(self.shape(path, text, "ss03=1"), self.shape(source, text, alternates))
+
+    def test_roman_f_and_ligatures_are_unchanged(self):
+        text = "f of off coffee fi ffi fluffy"
+        for path, source in self.faces:
+            if path.name.endswith("Italic.ttf"):
+                continue
+            for features in ("", "ss03=1", "liga=1", "dlig=1", "ss13=1"):
+                with self.subTest(face=path.name, features=features):
+                    self.assertEqual(self.shape(path, text, features), self.shape(source, text, features))
 
     def test_original_outlines_character_maps_and_positioning_are_preserved(self):
         for path, source_path in self.faces:

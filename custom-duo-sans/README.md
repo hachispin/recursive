@@ -13,6 +13,18 @@ The italic build uses Recursive's mastered static Casual Italic sources. Its
 single-storey `a` and `g` are baked into the base glyphs, rather than depending
 on an application to activate the `rvrn` OpenType feature.
 
+Italic `f` uses its original plain form by default. Enable **`ss03` (Swash f)**
+to use Recursive's existing proportional swash (`f.italic`). Both forms retain
+their original outlines, spacing, and accent anchors.
+
+Italic `fi` and `ffi` ligatures remain off by default with either form of `f`.
+Enable **`ss13` (Italic fi/ffi ligatures)** to
+use the original plain-form ligatures. These rules live in `ss13` instead of
+[`liga`, which shapers normally enable automatically](https://learn.microsoft.com/en-us/typography/opentype/spec/features_ko#tag-liga).
+When both `ss03` and `ss13` are enabled, standalone `f` uses the swash while
+`fi`/`ffi` use the original plain-form ligatures. Neither feature enables code
+ligatures, which remain under `dlig`. Roman faces retain their original behavior.
+
 Colons between digits are vertically centered automatically: `12:34`, `9:05`,
 `12:34:56`, and numeric ratios such as `3:2`. The build includes a `calt`
 (Contextual Alternates) substitution from `:` to Recursive's existing `∶` glyph,
