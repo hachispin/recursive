@@ -13,6 +13,20 @@ The italic build uses Recursive's mastered static Casual Italic sources. Its
 single-storey `a` and `g` are baked into the base glyphs, rather than depending
 on an application to activate the `rvrn` OpenType feature.
 
+Colons between digits are vertically centered automatically: `12:34`, `9:05`,
+`12:34:56`, and numeric ratios such as `3:2`. The build includes a `calt`
+(Contextual Alternates) substitution from `:` to Recursive's existing `∶` glyph,
+which has the same advance width. It also handles proportional figures and the
+alternate digit styles. Colons in prose, spaced colons, and `::` keep their usual
+form; the underlying text remains an ordinary colon.
+
+This follows the approach shown by [Inter's contextual alternates](https://rsms.me/inter/#features).
+[`calt` is enabled by default in standard OpenType shaping](https://learn.microsoft.com/en-us/typography/opentype/spec/features_ae#tag-calt),
+so the built fonts need no feature opt-in. Applications must support contextual
+alternates and leave them enabled. The rule stays contextual rather than being
+frozen into the base colon glyph, which would raise every colon. Code ligatures
+remain in the separate, opt-in `dlig` feature.
+
 This build intentionally does not use Recursive Code Config. That project is
 for configured monospace/code fonts; all faces here pin `MONO` to `0`.
 
@@ -37,6 +51,12 @@ python3 custom-duo-sans/build.py --weights 400 700
 The build needs Python 3 and FontTools. It assembles the mastered Sans static
 fonts already checked into this repository, so it does not need the older full
 Recursive mastering toolchain.
+
+To run the font shaping regression checks (requires HarfBuzz's `hb-shape`):
+
+```sh
+python3 -m unittest discover -s custom-duo-sans -v
+```
 
 ## Why static fonts?
 

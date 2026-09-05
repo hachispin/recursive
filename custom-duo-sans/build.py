@@ -8,7 +8,13 @@ import math
 import shutil
 from pathlib import Path
 
+from fontTools.otlLib.builder import (
+    ChainContextSubstBuilder,
+    ChainContextualRule,
+    SingleSubstBuilder,
+)
 from fontTools.ttLib import TTFont
+from fontTools.varLib.featureVars import buildFeatureRecord, sortFeatureList
 
 
 HERE = Path(__file__).resolve().parent
@@ -21,7 +27,7 @@ DEFAULT_SOURCE_DIR = (
 )
 DEFAULT_OUTPUT = HERE / "dist"
 FAMILY = "Recursive Duo Sans"
-BUILD_VERSION = "1.086"
+BUILD_VERSION = "1.088"
 WEIGHTS = {
     300: "Light",
     400: "Regular",
@@ -42,6 +48,55 @@ SOURCE_FILES = {
     900: ("RecursiveSansLnrSt-Black.ttf", "RecursiveSansCslSt-BlkItalic.ttf"),
     1000: ("RecursiveSansLnrSt-XBlk.ttf", "RecursiveSansCslSt-XBlkItalic.ttf"),
 }
+
+
+def add_time_colons(font: TTFont) -> None:
+    """Center colons between lining digits with the default-on calt feature."""
+    cmap = font.getBestCmap()
+    colon = cmap[ord(":")]
+    ratio = cmap[ord("∶")]
+    digit_names = {cmap[codepoint] for codepoint in range(ord("0"), ord("9") + 1)}
+    # Include proportional, slashed/dotted-zero and stylistic digit alternates.
+    # Superscripts, subscripts and fraction figures need their own punctuation.
+    digits = {name for name in font.getGlyphOrder() if name.split(".")[0] in digit_names}
+    gsub = font["GSUB"].table
+    lookups = gsub.LookupList.Lookup
+
+    replacement = SingleSubstBuilder(font, None)
+    replacement.mapping[colon] = ratio
+    replacement.lookup_index = len(lookups)
+    context = ChainContextSubstBuilder(font, None)
+    # Equivalent feature syntax: sub @digits colon' @digits by uni2236;
+    context.rules.append(ChainContextualRule([digits], [{colon}], [digits], [replacement]))
+    context_index = len(lookups) + 1
+    lookups.extend([replacement.build(), context.build()])
+    gsub.LookupList.LookupCount = len(lookups)
+
+    # Append lookups so existing substitutions (including dlig) retain their
+    # indices and digit alternates have already been selected when calt runs.
+    records = gsub.FeatureList.FeatureRecord
+    calt_indices = set()
+    for index, record in enumerate(records):
+        if record.FeatureTag == "calt":
+            record.Feature.LookupListIndex.append(context_index)
+            record.Feature.LookupCount = len(record.Feature.LookupListIndex)
+            calt_indices.add(index)
+
+    new_index = None
+    for script_record in gsub.ScriptList.ScriptRecord:
+        script = script_record.Script
+        languages = [script.DefaultLangSys] + [r.LangSys for r in script.LangSysRecord]
+        for language in languages:
+            if language is None or calt_indices.intersection(language.FeatureIndex):
+                continue
+            if new_index is None:
+                new_index = len(records)
+                records.append(buildFeatureRecord("calt", [context_index]))
+            language.FeatureIndex.append(new_index)
+            language.FeatureCount = len(language.FeatureIndex)
+    gsub.FeatureList.FeatureCount = len(records)
+    # OpenType requires sorted feature tags; remap all language references too.
+    sortFeatureList(gsub)
 
 
 def set_name(font: TTFont, name_id: int, value: str) -> None:
@@ -97,9 +152,9 @@ def update_metadata(font: TTFont, weight: int, italic: bool) -> None:
 
     set_name(font, 1, names["legacy_family"])
     set_name(font, 2, names["legacy_style"])
-    set_name(font, 3, f"{BUILD_VERSION};RecursiveDuoSans;{names['postscript_name']}")
+    set_name(font, 3, f"{BUILD_VERSION};{names['postscript_name']}")
     set_name(font, 4, names["full_name"])
-    set_name(font, 5, f"Version {BUILD_VERSION}; Recursive Duo Sans build 2")
+    set_name(font, 5, f"Version {BUILD_VERSION}; {FAMILY} build")
     set_name(font, 6, names["postscript_name"])
     set_name(font, 16, FAMILY)
     set_name(font, 17, names["typographic_style"])
@@ -142,6 +197,7 @@ def update_metadata(font: TTFont, weight: int, italic: bool) -> None:
 def build_face(source_dir: Path, output: Path, weight: int, italic: bool) -> tuple[Path, Path]:
     source_path = source_dir / SOURCE_FILES[weight][1 if italic else 0]
     font = TTFont(source_path, recalcTimestamp=False, lazy=False)
+    add_time_colons(font)
     update_metadata(font, weight, italic)
     suffix = "Italic" if italic else ""
     filename = f"RecursiveDuoSans-{WEIGHTS[weight]}{suffix}.ttf"
