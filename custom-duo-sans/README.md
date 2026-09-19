@@ -1,17 +1,23 @@
-# Recursive Duo Sans
+# Custom Recursive Sans families
 
-This is a two-voice, proportional build of Recursive:
+This build creates three proportional, separately installable Recursive families:
 
-- roman: `MONO=0`, `CASL=0`, `slnt=0`, `CRSV=0` — Sans Linear
-- italic: `MONO=0`, `CASL=1`, `slnt=-15`, `CRSV=1` — Sans Casual Italic
+| Family | Roman | Italic |
+| --- | --- | --- |
+| Recursive Duo Sans | Linear | Casual |
+| Recursive Linear Sans | Linear | Linear |
+| Recursive Casual Sans | Casual | Casual |
 
-The result is one style-linked family named **Recursive Duo Sans**. Selecting
-italic changes both the slant and the genre, so emphasis has a noticeably more
-handwritten voice while upright text stays crisp and linear.
+All faces use `MONO=0`. Roman faces use `slnt=0`, `CRSV=0`; italics use
+`slnt=-15`, `CRSV=1`. Linear faces use `CASL=0` and Casual faces use `CASL=1`.
+Each family has its own style links and names, so all three can be installed
+together. In Duo Sans, italic also switches from Linear to Casual; the other
+two families keep the same genre when switching to italic.
 
-The italic build uses Recursive's mastered static Casual Italic sources. Its
-single-storey `a` and `g` are baked into the base glyphs, rather than depending
-on an application to activate the `rvrn` OpenType feature.
+All three families share the tweaks described below. Italic faces use Recursive's
+mastered static Linear or Casual Italic sources. Their single-storey `a` and `g`
+are baked into the base glyphs, rather than depending on an application to
+activate the `rvrn` OpenType feature.
 
 Italic `f` uses its original plain form by default. Enable **`ss03` (Swash f)**
 to use Recursive's existing proportional swash (`f.italic`). Both forms retain
@@ -50,14 +56,22 @@ From the repository root:
 python3 custom-duo-sans/build.py
 ```
 
-The default build creates eight weights from Light (300) through ExtraBlack
-(1000), with a roman and italic at each weight. Install the desktop fonts from
-`custom-duo-sans/dist/ttf`.
+The default build creates all three families, each with eight weights from Light
+(300) through ExtraBlack (1000), with a roman and italic at each weight: 48 TTFs
+in total. Install the desktop fonts from `custom-duo-sans/dist/ttf`; filenames
+start with `RecursiveDuoSans`, `RecursiveLinearSans`, or `RecursiveCasualSans`.
 
-For a smaller family, pass specific weights:
+For fewer weights across all three families:
 
 ```sh
 python3 custom-duo-sans/build.py --weights 400 700
+```
+
+To select families, use `--variants` with one or more of `duo`, `linear`, and
+`casual`. For example, to build only the original Duo Sans family:
+
+```sh
+python3 custom-duo-sans/build.py --variants duo
 ```
 
 The build needs Python 3 and FontTools. It assembles the mastered Sans static
@@ -67,15 +81,15 @@ Recursive mastering toolchain.
 To run the font shaping regression checks (requires HarfBuzz's `hb-shape`):
 
 ```sh
-python3 -m unittest discover -s custom-duo-sans -v
+python3 -m unittest discover --start-directory custom-duo-sans --verbose
 ```
 
 ## Why static fonts?
 
-The source font exposes Casual and Slant as independent axes. This derivative
-deliberately couples them to the normal/italic style switch. Static paired faces
-express that relationship reliably in desktop applications without leaving
-extra Casual, Monospace, or Cursive controls for users to coordinate.
+The source font exposes Casual and Slant as independent axes. These derivatives
+choose a fixed genre for each roman and italic face. Static paired faces express
+those choices reliably in desktop applications without leaving extra Casual,
+Monospace, or Cursive controls for users to coordinate.
 
 ## License
 

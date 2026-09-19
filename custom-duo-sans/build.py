@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a proportional Recursive family with Linear romans and Casual italics."""
+"""Build proportional Recursive Duo, Linear, and Casual Sans families."""
 
 from __future__ import annotations
 
@@ -29,8 +29,12 @@ DEFAULT_SOURCE_DIR = (
     / "static"
 )
 DEFAULT_OUTPUT = HERE / "dist"
-FAMILY = "Recursive Duo Sans"
-BUILD_VERSION = "1.090"
+FAMILIES = {
+    "duo": "Recursive Duo Sans",
+    "linear": "Recursive Linear Sans",
+    "casual": "Recursive Casual Sans",
+}
+BUILD_VERSION = "1.091"
 WEIGHTS = {
     300: "Light",
     400: "Regular",
@@ -42,14 +46,30 @@ WEIGHTS = {
     1000: "ExtraBlack",
 }
 SOURCE_FILES = {
-    300: ("RecursiveSansLnrSt-Light.ttf", "RecursiveSansCslSt-LtItalic.ttf"),
-    400: ("RecursiveSansLnrSt-Regular.ttf", "RecursiveSansCslSt-Italic.ttf"),
-    500: ("RecursiveSansLnrSt-Med.ttf", "RecursiveSansCslSt-MedItalic.ttf"),
-    600: ("RecursiveSansLnrSt-SemiBold.ttf", "RecursiveSansCslSt-SmBdItalic.ttf"),
-    700: ("RecursiveSansLnrSt-Bold.ttf", "RecursiveSansCslSt-BdItalic.ttf"),
-    800: ("RecursiveSansLnrSt-ExtraBold.ttf", "RecursiveSansCslSt-XBdItalic.ttf"),
-    900: ("RecursiveSansLnrSt-Black.ttf", "RecursiveSansCslSt-BlkItalic.ttf"),
-    1000: ("RecursiveSansLnrSt-XBlk.ttf", "RecursiveSansCslSt-XBlkItalic.ttf"),
+    "linear": {
+        300: ("RecursiveSansLnrSt-Light.ttf", "RecursiveSansLnrSt-LightItalic.ttf"),
+        400: ("RecursiveSansLnrSt-Regular.ttf", "RecursiveSansLnrSt-Italic.ttf"),
+        500: ("RecursiveSansLnrSt-Med.ttf", "RecursiveSansLnrSt-MedItalic.ttf"),
+        600: ("RecursiveSansLnrSt-SemiBold.ttf", "RecursiveSansLnrSt-SmBdItalic.ttf"),
+        700: ("RecursiveSansLnrSt-Bold.ttf", "RecursiveSansLnrSt-BoldItalic.ttf"),
+        800: ("RecursiveSansLnrSt-ExtraBold.ttf", "RecursiveSansLnrSt-ExBdItalic.ttf"),
+        900: ("RecursiveSansLnrSt-Black.ttf", "RecursiveSansLnrSt-BlackItalic.ttf"),
+        1000: ("RecursiveSansLnrSt-XBlk.ttf", "RecursiveSansLnrSt-XBlkItalic.ttf"),
+    },
+    "casual": {
+        300: ("RecursiveSansCslSt-Light.ttf", "RecursiveSansCslSt-LtItalic.ttf"),
+        400: ("RecursiveSansCslSt-Regular.ttf", "RecursiveSansCslSt-Italic.ttf"),
+        500: ("RecursiveSansCslSt-Med.ttf", "RecursiveSansCslSt-MedItalic.ttf"),
+        600: ("RecursiveSansCslSt-SemiBd.ttf", "RecursiveSansCslSt-SmBdItalic.ttf"),
+        700: ("RecursiveSansCslSt-Bold.ttf", "RecursiveSansCslSt-BdItalic.ttf"),
+        800: ("RecursiveSansCslSt-ExtraBd.ttf", "RecursiveSansCslSt-XBdItalic.ttf"),
+        900: ("RecursiveSansCslSt-Black.ttf", "RecursiveSansCslSt-BlkItalic.ttf"),
+        1000: ("RecursiveSansCslSt-XBlk.ttf", "RecursiveSansCslSt-XBlkItalic.ttf"),
+    },
+}
+SOURCE_FILES["duo"] = {
+    weight: (SOURCE_FILES["linear"][weight][0], SOURCE_FILES["casual"][weight][1])
+    for weight in WEIGHTS
 }
 
 
@@ -151,7 +171,8 @@ def set_name(font: TTFont, name_id: int, value: str) -> None:
     table.setName(value, name_id, 1, 0, 0)
 
 
-def style_names(weight: int, italic: bool) -> dict[str, str]:
+def style_names(weight: int, italic: bool, variant: str = "duo") -> dict[str, str]:
+    family = FAMILIES[variant]
     weight_name = WEIGHTS[weight]
     typographic_style = (
         "Italic"
@@ -166,7 +187,7 @@ def style_names(weight: int, italic: bool) -> dict[str, str]:
     # The four classic RIBBI faces share one legacy family. Other weights get
     # their own legacy family so older Windows applications still link italics.
     if weight in (400, 700):
-        legacy_family = FAMILY
+        legacy_family = family
         legacy_style = (
             "Bold Italic"
             if weight == 700 and italic
@@ -177,11 +198,11 @@ def style_names(weight: int, italic: bool) -> dict[str, str]:
             else "Regular"
         )
     else:
-        legacy_family = f"{FAMILY} {weight_name}"
+        legacy_family = f"{family} {weight_name}"
         legacy_style = "Italic" if italic else "Regular"
 
-    full_name = FAMILY if typographic_style == "Regular" else f"{FAMILY} {typographic_style}"
-    postscript_name = f"RecursiveDuoSans-{typographic_style.replace(' ', '')}"
+    full_name = family if typographic_style == "Regular" else f"{family} {typographic_style}"
+    postscript_name = f"{family.replace(' ', '')}-{typographic_style.replace(' ', '')}"
     return {
         "legacy_family": legacy_family,
         "legacy_style": legacy_style,
@@ -191,19 +212,20 @@ def style_names(weight: int, italic: bool) -> dict[str, str]:
     }
 
 
-def update_metadata(font: TTFont, weight: int, italic: bool) -> None:
-    names = style_names(weight, italic)
+def update_metadata(font: TTFont, weight: int, italic: bool, variant: str = "duo") -> None:
+    family = FAMILIES[variant]
+    names = style_names(weight, italic, variant)
 
     set_name(font, 1, names["legacy_family"])
     set_name(font, 2, names["legacy_style"])
     set_name(font, 3, f"{BUILD_VERSION};{names['postscript_name']}")
     set_name(font, 4, names["full_name"])
-    set_name(font, 5, f"Version {BUILD_VERSION}; {FAMILY} build")
+    set_name(font, 5, f"Version {BUILD_VERSION}; {family} build")
     set_name(font, 6, names["postscript_name"])
-    set_name(font, 16, FAMILY)
+    set_name(font, 16, family)
     set_name(font, 17, names["typographic_style"])
     set_name(font, 18, names["full_name"])
-    set_name(font, 21, FAMILY)
+    set_name(font, 21, family)
     set_name(font, 22, names["typographic_style"])
 
     os2 = font["OS/2"]
@@ -238,15 +260,17 @@ def update_metadata(font: TTFont, weight: int, italic: bool) -> None:
         del font["DSIG"]
 
 
-def build_face(source_dir: Path, output: Path, weight: int, italic: bool) -> tuple[Path, Path]:
-    source_path = source_dir / SOURCE_FILES[weight][1 if italic else 0]
+def build_face(
+    source_dir: Path, output: Path, weight: int, italic: bool, variant: str = "duo"
+) -> tuple[Path, Path]:
+    source_path = source_dir / SOURCE_FILES[variant][weight][1 if italic else 0]
     font = TTFont(source_path, recalcTimestamp=False, lazy=False)
     if italic:
         configure_italic_f(font)
     add_time_colons(font)
-    update_metadata(font, weight, italic)
+    update_metadata(font, weight, italic, variant)
     suffix = "Italic" if italic else ""
-    filename = f"RecursiveDuoSans-{WEIGHTS[weight]}{suffix}.ttf"
+    filename = f"{FAMILIES[variant].replace(' ', '')}-{WEIGHTS[weight]}{suffix}.ttf"
     ttf_path = output / "ttf" / filename
     font.save(ttf_path, reorderTables=False)
     font.close()
@@ -254,13 +278,15 @@ def build_face(source_dir: Path, output: Path, weight: int, italic: bool) -> tup
     return ttf_path, source_path
 
 
-def validate_face(path: Path, source_path: Path, weight: int, italic: bool) -> None:
+def validate_face(
+    path: Path, source_path: Path, weight: int, italic: bool, variant: str = "duo"
+) -> None:
     font = TTFont(path)
     source = TTFont(source_path)
     try:
-        expected_style = style_names(weight, italic)["typographic_style"]
+        expected_style = style_names(weight, italic, variant)["typographic_style"]
         assert "fvar" not in font, f"{path.name}: variation axes were not fully pinned"
-        assert font["name"].getDebugName(16) == FAMILY
+        assert font["name"].getDebugName(16) == FAMILIES[variant]
         assert font["name"].getDebugName(17) == expected_style
         assert font["name"].getDebugName(5).startswith(f"Version {BUILD_VERSION}")
         assert font["OS/2"].usWeightClass == weight
@@ -288,6 +314,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source-dir", type=Path, default=DEFAULT_SOURCE_DIR)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--weights", type=int, nargs="+", default=list(WEIGHTS))
+    parser.add_argument(
+        "--variants", nargs="+", choices=list(FAMILIES), default=list(FAMILIES),
+        help="families to build (default: all three)",
+    )
     return parser.parse_args()
 
 
@@ -298,8 +328,9 @@ def main() -> None:
         raise SystemExit(f"Unsupported weights: {', '.join(map(str, unknown_weights))}")
     missing_sources = [
         args.source_dir / filename
+        for variant in args.variants
         for weight in args.weights
-        for filename in SOURCE_FILES[weight]
+        for filename in SOURCE_FILES[variant][weight]
         if not (args.source_dir / filename).is_file()
     ]
     if missing_sources:
@@ -309,12 +340,13 @@ def main() -> None:
     (output / "ttf").mkdir(parents=True, exist_ok=True)
 
     built = []
-    for weight in args.weights:
-        for italic in (False, True):
-            ttf, source_path = build_face(args.source_dir, output, weight, italic)
-            validate_face(ttf, source_path, weight, italic)
-            built.append(ttf)
-            print(f"built {ttf.relative_to(output)}")
+    for variant in args.variants:
+        for weight in args.weights:
+            for italic in (False, True):
+                ttf, source_path = build_face(args.source_dir, output, weight, italic, variant)
+                validate_face(ttf, source_path, weight, italic, variant)
+                built.append(ttf)
+                print(f"built {ttf.relative_to(output)}")
 
     shutil.copyfile(REPO_ROOT / "OFL.txt", output / "OFL.txt")
     print(f"\n{len(built)} TTF faces written to {output}")

@@ -3,13 +3,14 @@
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 from fontTools.ttLib import TTFont
 
-from build import DEFAULT_SOURCE_DIR, WEIGHTS, build_face, validate_face
+from build import DEFAULT_SOURCE_DIR, FAMILIES, WEIGHTS, build_face, validate_face
 
 
 @unittest.skipUnless(shutil.which("hb-shape"), "HarfBuzz hb-shape is required")
@@ -21,11 +22,48 @@ class DuoSansTests(unittest.TestCase):
         output = Path(temporary.name)
         (output / "ttf").mkdir()
         cls.faces = []
-        for weight in WEIGHTS:
-            for italic in (False, True):
-                path, source = build_face(DEFAULT_SOURCE_DIR, output, weight, italic)
-                validate_face(path, source, weight, italic)
-                cls.faces.append((path, source))
+        cls.configurations = []
+        for variant in FAMILIES:
+            for weight in WEIGHTS:
+                for italic in (False, True):
+                    path, source = build_face(DEFAULT_SOURCE_DIR, output, weight, italic, variant)
+                    validate_face(path, source, weight, italic, variant)
+                    cls.faces.append((path, source))
+                    cls.configurations.append((variant, weight, italic, path, source))
+
+    def test_family_identity_and_source_selection(self):
+        voices = {"duo": ("Lnr", "Csl"), "linear": ("Lnr", "Lnr"), "casual": ("Csl", "Csl")}
+        postscript_names = set()
+        unique_ids = set()
+        self.assertEqual(len(self.faces), 48)
+        for variant, weight, italic, path, source_path in self.configurations:
+            with self.subTest(face=path.name), TTFont(path) as font, TTFont(source_path) as source:
+                self.assertTrue(source_path.name.startswith(f"RecursiveSans{voices[variant][italic]}St-"))
+                self.assertEqual(source["OS/2"].usWeightClass, weight)
+                self.assertEqual(bool(source["OS/2"].fsSelection & 1), italic)
+                family = FAMILIES[variant]
+                legacy_family = family if weight in (400, 700) else f"{family} {WEIGHTS[weight]}"
+                self.assertEqual(font["name"].getDebugName(1), legacy_family)
+                self.assertEqual(font["name"].getDebugName(16), family)
+                self.assertEqual(font["name"].getDebugName(21), family)
+                postscript_names.add(font["name"].getDebugName(6))
+                unique_ids.add(font["name"].getDebugName(3))
+        self.assertEqual(len(postscript_names), 48)
+        self.assertEqual(len(unique_ids), 48)
+
+    def test_cli_builds_selected_families(self):
+        with tempfile.TemporaryDirectory(prefix="recursive-family-selection-") as directory:
+            subprocess.run(
+                [sys.executable, str(Path(__file__).with_name("build.py")),
+                 "--variants", "linear", "casual", "--weights", "400", "--output", directory],
+                check=True, capture_output=True, text=True,
+            )
+            self.assertEqual(
+                {path.name for path in (Path(directory) / "ttf").glob("*.ttf")},
+                {"RecursiveLinearSans-Regular.ttf", "RecursiveLinearSans-RegularItalic.ttf",
+                 "RecursiveCasualSans-Regular.ttf", "RecursiveCasualSans-RegularItalic.ttf"},
+            )
+            self.assertTrue((Path(directory) / "OFL.txt").is_file())
 
     def shape(self, path, text, features="", options=()):
         command = [
