@@ -29,7 +29,7 @@ FAMILIES = {
     "linear": "Recursive Linear Sans",
     "casual": "Recursive Casual Sans",
 }
-BUILD_VERSION = "1.091"
+BUILD_VERSION = "1.092"
 WEIGHTS = {
     300: "Light",
     400: "Regular",
@@ -233,14 +233,15 @@ def update_metadata(font: TTFont, weight: int, italic: bool, variant: str = "duo
     if weight == 400 and not italic:
         os2.fsSelection |= 1 << 6
 
-    cmap = font.getBestCmap()
-    lowercase_widths = [
-        font["hmtx"].metrics[cmap[codepoint]][0]
-        for codepoint in range(ord("a"), ord("z") + 1)
-        if codepoint in cmap
-    ]
-    if lowercase_widths:
-        os2.xAvgCharWidth = round(sum(lowercase_widths) / len(lowercase_widths))
+    advance_widths = [width for width, _ in font["hmtx"].metrics.values() if width]
+    if advance_widths:
+        os2.xAvgCharWidth = round(sum(advance_widths) / len(advance_widths))
+
+    # Windows GDI uses these values as clipping bounds. The head bounds cover
+    # every outline, including unencoded alternates reached through OpenType.
+    head = font["head"]
+    os2.usWinAscent = max(os2.usWinAscent, head.yMax)
+    os2.usWinDescent = max(os2.usWinDescent, -head.yMin)
 
     font["head"].fontRevision = float(BUILD_VERSION)
     font["head"].macStyle = (1 if weight == 700 else 0) | (2 if italic else 0)
@@ -288,6 +289,12 @@ def validate_face(
         assert bool(font["OS/2"].fsSelection & 1) == italic
         assert bool(font["head"].macStyle & 2) == italic
         assert font["post"].isFixedPitch == 0
+        advance_widths = [width for width, _ in font["hmtx"].metrics.values() if width]
+        assert font["OS/2"].xAvgCharWidth == round(
+            sum(advance_widths) / len(advance_widths)
+        )
+        assert font["OS/2"].usWinAscent >= font["head"].yMax
+        assert font["OS/2"].usWinDescent >= -font["head"].yMin
         if italic:
             assert font.getBestCmap()[ord("f")] == "f"
             assert "liga" not in {

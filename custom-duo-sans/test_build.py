@@ -13,7 +13,11 @@ from fontTools.ttLib import TTFont
 from build import DEFAULT_SOURCE_DIR, FAMILIES, WEIGHTS, build_face, validate_face
 
 
-@unittest.skipUnless(shutil.which("hb-shape"), "HarfBuzz hb-shape is required")
+requires_harfbuzz = unittest.skipUnless(
+    shutil.which("hb-shape"), "HarfBuzz hb-shape is required"
+)
+
+
 class DuoSansTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -91,6 +95,7 @@ class DuoSansTests(unittest.TestCase):
         # Only the drawn glyph changes: advances, offsets and text clusters stay.
         self.assertEqual(self.shape(path, text, features, options), expected)
 
+    @requires_harfbuzz
     def test_times_are_centered_by_default_and_calt_can_disable_them(self):
         text = "12:34 9:05 12:34:56 0:00 23:59 3:2 123:456 00:00:00.000"
         for path, source in self.faces:
@@ -98,6 +103,7 @@ class DuoSansTests(unittest.TestCase):
                 self.assert_centered(path, text)
                 self.assertEqual(self.shape(path, text, "calt=0"), self.shape(source, text))
 
+    @requires_harfbuzz
     def test_all_digit_pairs_and_numeral_styles(self):
         text = " ".join(f"{left}:{right}" for left in range(10) for right in range(10))
         for path, _ in self.faces:
@@ -109,6 +115,7 @@ class DuoSansTests(unittest.TestCase):
                 with self.subTest(face=path.name, features=features):
                     self.assert_centered(path, text, features)
 
+    @requires_harfbuzz
     def test_non_numeric_colons_and_literal_ratios_keep_their_forms(self):
         text = (
             ": 12: :34 key:value a:2 2:b :: 12::34 12: 34 12 :34 12 : 34 "
@@ -118,6 +125,7 @@ class DuoSansTests(unittest.TestCase):
             with self.subTest(face=path.name):
                 self.assertEqual(self.shape(path, text), self.shape(source, text))
 
+    @requires_harfbuzz
     def test_raised_and_lowered_digits_do_not_get_lining_punctuation(self):
         for path, source in self.faces:
             for features in ("sups=1", "sinf=1", "numr=1", "dnom=1"):
@@ -127,6 +135,7 @@ class DuoSansTests(unittest.TestCase):
                         self.shape(source, "12:34", features),
                     )
 
+    @requires_harfbuzz
     def test_code_ligatures_remain_opt_in_and_independent(self):
         operators = "a:=b :: -> => === != <= >= && ||"
         for path, source in self.faces:
@@ -143,6 +152,7 @@ class DuoSansTests(unittest.TestCase):
                     self.shape(source, "12:34", "dlig=1"),
                 )
 
+    @requires_harfbuzz
     def test_default_and_localized_language_systems(self):
         for path, source in self.faces:
             for language in ("und", "en", "ca", "mo", "nl", "ro", "vi"):
@@ -158,6 +168,7 @@ class DuoSansTests(unittest.TestCase):
                     if path.name.endswith("Italic.ttf"):
                         self.assertEqual(self.shape(path, "f", "ss03=1", options)[0]["g"], "f.italic")
 
+    @requires_harfbuzz
     def test_plain_f_is_the_italic_default_and_ss03_enables_swash(self):
         text = "f of off coffee fluffy fi ffi fifty office gf pf yf"
         alternates = ",".join(f"aalt[{i}]=3" for i, char in enumerate(text) if char == "f")
@@ -177,6 +188,7 @@ class DuoSansTests(unittest.TestCase):
             shaped = self.shape(path, "f", options=("--shapers=fallback",))
             self.assertEqual(shaped[0]["g"], "f")
 
+    @requires_harfbuzz
     def test_italic_ligatures_require_ss13(self):
         text = "fi ffi f of office fifty"
         for path, source in self.faces:
@@ -194,6 +206,7 @@ class DuoSansTests(unittest.TestCase):
                     glyphs = self.shape(path, "fi ffi", features)
                     self.assertFalse({"uniFB01", "f_f_i"}.intersection(g["g"] for g in glyphs))
 
+    @requires_harfbuzz
     def test_both_f_forms_preserve_accent_positioning(self):
         text = "f́ f̣ f̨"
         alternates = ",".join(f"aalt[{i}]=3" for i, char in enumerate(text) if char == "f")
@@ -204,6 +217,7 @@ class DuoSansTests(unittest.TestCase):
                 self.assertEqual(self.shape(path, text), self.shape(source, text))
                 self.assertEqual(self.shape(path, text, "ss03=1"), self.shape(source, text, alternates))
 
+    @requires_harfbuzz
     def test_roman_f_and_ligatures_are_unchanged(self):
         text = "f of off coffee fi ffi fluffy"
         for path, source in self.faces:
