@@ -14,6 +14,8 @@ from fontTools.otlLib.builder import (
     ChainContextSubstBuilder,
     ChainContextualRule,
     SingleSubstBuilder,
+    buildPairPosGlyphsSubtable,
+    buildValue,
 )
 from fontTools.ttLib import TTFont
 from fontTools.ttLib.tables import otTables
@@ -29,7 +31,7 @@ FAMILIES = {
     "linear": "Recursive Linear Sans",
     "casual": "Recursive Casual Sans",
 }
-BUILD_VERSION = "1.092"
+BUILD_VERSION = "1.093"
 WEIGHTS = {
     300: "Light",
     400: "Regular",
@@ -158,6 +160,53 @@ def configure_italic_f(font: TTFont) -> None:
     sortFeatureList(gsub)
 
 
+def add_italic_te_kerning(font: TTFont) -> None:
+    """Tighten italic t-e pairs without applying the t class's pi member."""
+    gpos = font["GPOS"].table
+    kern_indices = {
+        index
+        for record in gpos.FeatureList.FeatureRecord
+        if record.FeatureTag == "kern"
+        for index in record.Feature.LookupListIndex
+    }
+    class_subtables = []
+    for index in kern_indices:
+        lookup = gpos.LookupList.Lookup[index]
+        for subtable in lookup.SubTable:
+            if subtable.Format != 2 or "t" not in subtable.Coverage.glyphs:
+                continue
+            left_class = subtable.ClassDef1.classDefs.get("t", 0)
+            right_class = subtable.ClassDef2.classDefs.get("e", 0)
+            value = subtable.Class1Record[left_class].Class2Record[right_class].Value1
+            if value is None or (getattr(value, "XAdvance", 0) or 0) != 0:
+                raise ValueError("The italic t-e class pair is no longer unkerned")
+            class_subtables.append((lookup, subtable, left_class, right_class))
+    if len(class_subtables) != 1:
+        raise ValueError("Expected exactly one italic t-e class pair")
+
+    lookup, subtable, left_class, right_class = class_subtables[0]
+    glyph_order = font.getGlyphOrder()
+    left_glyphs = {
+        name
+        for name in glyph_order
+        if subtable.ClassDef1.classDefs.get(name, 0) == left_class and name != "pi"
+    }
+    right_glyphs = {
+        name
+        for name in glyph_order
+        if subtable.ClassDef2.classDefs.get(name, 0) == right_class
+    }
+    adjustment = buildValue({"XAdvance": -20})
+    pairs = {
+        (left, right): (adjustment, None)
+        for left in left_glyphs
+        for right in right_glyphs
+    }
+    exception = buildPairPosGlyphsSubtable(pairs, font.getReverseGlyphMap())
+    lookup.SubTable.insert(0, exception)
+    lookup.SubTableCount = len(lookup.SubTable)
+
+
 def set_name(font: TTFont, name_id: int, value: str) -> None:
     """Replace a name in English Windows and Macintosh records."""
     table = font["name"]
@@ -263,6 +312,7 @@ def build_face(
     font = TTFont(source_path, recalcTimestamp=False, lazy=False)
     if italic:
         configure_italic_f(font)
+        add_italic_te_kerning(font)
     add_time_colons(font)
     update_metadata(font, weight, italic, variant)
     suffix = "Italic" if italic else ""

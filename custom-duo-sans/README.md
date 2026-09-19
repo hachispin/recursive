@@ -31,6 +31,10 @@ When both `ss03` and `ss13` are enabled, standalone `f` uses the swash while
 `fi`/`ffi` use the original plain-form ligatures. Neither feature enables code
 ligatures, which remain under `dlig`. Roman faces retain their original behavior.
 
+Italic faces tighten `t` followed by `e` or an accented `e` by 20 font units.
+The exception includes accented `t` forms but excludes the unrelated `pi` glyph
+from the source kerning class. Roman `te` spacing remains unchanged.
+
 Colons between digits are vertically centered automatically: `12:34`, `9:05`,
 `12:34:56`, and numeric ratios such as `3:2`. The build includes a `calt`
 (Contextual Alternates) substitution from `:` to Recursive's existing `∶` glyph,

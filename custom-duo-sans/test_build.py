@@ -10,7 +10,14 @@ from pathlib import Path
 
 from fontTools.ttLib import TTFont
 
-from build import DEFAULT_SOURCE_DIR, FAMILIES, WEIGHTS, build_face, validate_face
+from build import (
+    DEFAULT_SOURCE_DIR,
+    FAMILIES,
+    WEIGHTS,
+    add_italic_te_kerning,
+    build_face,
+    validate_face,
+)
 
 
 requires_harfbuzz = unittest.skipUnless(
@@ -123,7 +130,10 @@ class DuoSansTests(unittest.TestCase):
         )
         for path, source in self.faces:
             with self.subTest(face=path.name):
-                self.assertEqual(self.shape(path, text), self.shape(source, text))
+                self.assertEqual(
+                    self.shape(path, text, "kern=0"),
+                    self.shape(source, text, "kern=0"),
+                )
 
     @requires_harfbuzz
     def test_raised_and_lowered_digits_do_not_get_lining_punctuation(self):
@@ -207,6 +217,18 @@ class DuoSansTests(unittest.TestCase):
                     self.assertFalse({"uniFB01", "f_f_i"}.intersection(g["g"] for g in glyphs))
 
     @requires_harfbuzz
+    def test_italic_te_kerning_excludes_pi(self):
+        pairs = ("te", "ţé", "ťě", "țệ", "ṭë", "ṯê", "ẗē", "ŧė")
+        for _, _, italic, path, _ in self.configurations:
+            for pair in pairs:
+                with self.subTest(face=path.name, pair=pair):
+                    kerned = sum(glyph["ax"] for glyph in self.shape(path, pair))
+                    unkerned = sum(glyph["ax"] for glyph in self.shape(path, pair, "kern=0"))
+                    self.assertEqual(kerned - unkerned, -20 if italic else 0)
+            with self.subTest(face=path.name, pair="πe"):
+                self.assertEqual(self.shape(path, "πe"), self.shape(path, "πe", "kern=0"))
+
+    @requires_harfbuzz
     def test_both_f_forms_preserve_accent_positioning(self):
         text = "f́ f̣ f̨"
         alternates = ",".join(f"aalt[{i}]=3" for i, char in enumerate(text) if char == "f")
@@ -231,9 +253,14 @@ class DuoSansTests(unittest.TestCase):
         for path, source_path in self.faces:
             with self.subTest(face=path.name), TTFont(path) as font, TTFont(source_path) as source:
                 self.assertEqual(font.getGlyphOrder(), source.getGlyphOrder())
-                for tag in ("cmap", "glyf", "hmtx", "GDEF", "GPOS"):
+                for tag in ("cmap", "glyf", "hmtx", "GDEF"):
                     # Recompile both sides so cmap subtable packing is normalized.
                     self.assertEqual(font[tag].compile(font), source[tag].compile(source), tag)
+                if path.name.endswith("Italic.ttf"):
+                    add_italic_te_kerning(source)
+                self.assertEqual(
+                    font["GPOS"].compile(font), source["GPOS"].compile(source), "GPOS"
+                )
                 gsub = font["GSUB"].table
                 tags = [record.FeatureTag for record in gsub.FeatureList.FeatureRecord]
                 self.assertEqual(tags, sorted(tags))
