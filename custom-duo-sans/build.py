@@ -22,13 +22,8 @@ from fontTools.varLib.featureVars import buildFeatureRecord, sortFeatureList
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent
-DEFAULT_SOURCE_DIR = (
-    REPO_ROOT
-    / "fonts"
-    / "recursive_for_googlefonts"
-    / "static"
-)
-DEFAULT_OUTPUT = HERE / "dist"
+DEFAULT_SOURCE_DIR = HERE / "sources" / "ttf"
+DEFAULT_OUTPUT = REPO_ROOT / "fonts"
 FAMILIES = {
     "duo": "Recursive Duo Sans",
     "linear": "Recursive Linear Sans",

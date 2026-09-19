@@ -28,3 +28,12 @@ master_ttf
 # release prep files
 Recursive*.zip
 *_ignore
+
+# Keep custom releases in fonts/ttf; ignore upstream release-builder output.
+/fonts/*
+!/fonts/README.md
+!/fonts/OFL.txt
+!/fonts/ttf/
+
+# Superseded custom build output location.
+/custom-duo-sans/dist/

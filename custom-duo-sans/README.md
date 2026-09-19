@@ -58,7 +58,7 @@ python3 custom-duo-sans/build.py
 
 The default build creates all three families, each with eight weights from Light
 (300) through ExtraBlack (1000), with a roman and italic at each weight: 48 TTFs
-in total. Install the desktop fonts from `custom-duo-sans/dist/ttf`; filenames
+in total. Install the desktop fonts from [`fonts/ttf`](../fonts/ttf); filenames
 start with `RecursiveDuoSans`, `RecursiveLinearSans`, or `RecursiveCasualSans`.
 
 For fewer weights across all three families:
@@ -74,9 +74,10 @@ To select families, use `--variants` with one or more of `duo`, `linear`, and
 python3 custom-duo-sans/build.py --variants duo
 ```
 
-The build needs Python 3 and FontTools. It assembles the mastered Sans static
-fonts already checked into this repository, so it does not need the older full
-Recursive mastering toolchain.
+The build needs Python 3 and FontTools. It assembles the 32 mastered Sans static
+fonts tracked in [`sources/ttf`](sources/ttf), so it does not need the older full
+Recursive mastering toolchain or a network download. These upstream inputs are
+kept separately from the custom output fonts. See [source provenance](sources/README.md).
 
 To run the font shaping regression checks (requires HarfBuzz's `hb-shape`):
 
