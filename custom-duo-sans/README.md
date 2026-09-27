@@ -38,10 +38,14 @@ source kerning class. Roman `te` spacing remains unchanged.
 
 Some heavy source masters let adjacent glyphs overlap, especially Casual pairs
 such as `Q)`, `qj`, and `Lj`. These builds add measured pair kerning to give
-those combinations a small gap. Glyph outlines and advance widths stay intact.
+those combinations a small gap. Glyph outlines stay intact.
 The adjustments are listed in [`collision_kerning.json`](collision_kerning.json).
 Each pair gets the same adjustment at every weight of its genre and slope, so
 text keeps the same length when the weight changes.
+
+All advancing glyphs are spaced 20 font units closer together than the source
+fonts, including spaces and punctuation. Zero-width marks remain zero-width.
+The collision exceptions account for this tighter spacing.
 
 Colons between digits are vertically centered automatically: `12:34`, `9:05`,
 `12:34:56`, and numeric ratios such as `3:2`. The build includes a `calt`

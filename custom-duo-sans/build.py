@@ -32,7 +32,8 @@ FAMILIES = {
     "linear": "Recursive Linear Sans",
     "casual": "Recursive Casual Sans",
 }
-BUILD_VERSION = "1.093"
+BUILD_VERSION = "1.094"
+SPACING_REDUCTION = 20
 WEIGHTS = {
     300: "Light",
     400: "Regular",
@@ -247,9 +248,23 @@ def add_collision_kerning(font: TTFont, voice: str, italic: bool) -> None:
                 value = subtable.Class1Record[left_class].Class2Record[right_class].Value1
                 original = (getattr(value, "XAdvance", 0) or 0) if value else 0
                 break
-        pairs[(left, right)] = (buildValue({"XAdvance": original + extra}), None)
+        # The reduced glyph advance would remove part of this safety gap.
+        pairs[(left, right)] = (
+            buildValue({"XAdvance": original + extra + SPACING_REDUCTION}), None
+        )
     lookup.SubTable.insert(0, buildPairPosGlyphsSubtable(pairs, font.getReverseGlyphMap()))
     lookup.SubTableCount = len(lookup.SubTable)
+
+
+def reduce_spacing(font: TTFont) -> None:
+    """Tighten positive glyph advances uniformly without moving their outlines."""
+    metrics = font["hmtx"].metrics
+    for name, (advance, left_bearing) in metrics.items():
+        if advance:
+            if advance <= SPACING_REDUCTION:
+                raise ValueError(f"{name} is too narrow for the spacing reduction")
+            metrics[name] = (advance - SPACING_REDUCTION, left_bearing)
+    font["hhea"].recalc(font)
 
 
 def set_name(font: TTFont, name_id: int, value: str) -> None:
@@ -360,6 +375,7 @@ def build_face(
         add_italic_te_kerning(font)
     voice = "casual" if variant == "casual" or (variant == "duo" and italic) else "linear"
     add_collision_kerning(font, voice, italic)
+    reduce_spacing(font)
     add_time_colons(font)
     update_metadata(font, weight, italic, variant)
     suffix = "Italic" if italic else ""

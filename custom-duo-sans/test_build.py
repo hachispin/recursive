@@ -13,10 +13,12 @@ from fontTools.ttLib import TTFont
 from build import (
     DEFAULT_SOURCE_DIR,
     FAMILIES,
+    SPACING_REDUCTION,
     WEIGHTS,
     add_collision_kerning,
     add_italic_te_kerning,
     build_face,
+    reduce_spacing,
     validate_face,
 )
 
@@ -33,15 +35,28 @@ class DuoSansTests(unittest.TestCase):
         cls.addClassCleanup(temporary.cleanup)
         output = Path(temporary.name)
         (output / "ttf").mkdir()
+        (output / "reference").mkdir()
         cls.faces = []
         cls.configurations = []
+        references = {}
         for variant in FAMILIES:
             for weight in WEIGHTS:
                 for italic in (False, True):
                     path, source = build_face(DEFAULT_SOURCE_DIR, output, weight, italic, variant)
                     validate_face(path, source, weight, italic, variant)
-                    cls.faces.append((path, source))
-                    cls.configurations.append((variant, weight, italic, path, source))
+                    if source not in references:
+                        reference = output / "reference" / source.name
+                        with TTFont(source) as font:
+                            if italic:
+                                add_italic_te_kerning(font)
+                            voice = "casual" if variant == "casual" or (variant == "duo" and italic) else "linear"
+                            add_collision_kerning(font, voice, italic)
+                            reduce_spacing(font)
+                            font.save(reference)
+                        references[source] = reference
+                    reference = references[source]
+                    cls.faces.append((path, reference))
+                    cls.configurations.append((variant, weight, italic, path, reference))
 
     def test_family_identity_and_source_selection(self):
         voices = {"duo": ("Lnr", "Csl"), "linear": ("Lnr", "Lnr"), "casual": ("Csl", "Csl")}
@@ -62,6 +77,17 @@ class DuoSansTests(unittest.TestCase):
                 unique_ids.add(font["name"].getDebugName(3))
         self.assertEqual(len(postscript_names), 48)
         self.assertEqual(len(unique_ids), 48)
+
+    def test_spacing_reduction_preserves_zero_width_marks(self):
+        for path, reference in self.faces:
+            with self.subTest(face=path.name), TTFont(path) as font, TTFont(DEFAULT_SOURCE_DIR / reference.name) as source:
+                for name, (advance, left_bearing) in source["hmtx"].metrics.items():
+                    expected = advance - SPACING_REDUCTION if advance else 0
+                    self.assertEqual(font["hmtx"][name], (expected, left_bearing))
+                self.assertEqual(
+                    font["hhea"].advanceWidthMax,
+                    max(advance for advance, _ in font["hmtx"].metrics.values()),
+                )
 
     def test_cli_builds_selected_families(self):
         with tempfile.TemporaryDirectory(prefix="recursive-family-selection-") as directory:
@@ -284,8 +310,10 @@ class DuoSansTests(unittest.TestCase):
             )
             with self.subTest(face=path.name, pair=pair):
                 built_advance = sum(glyph["ax"] for glyph in self.shape(path, pair))
-                source_advance = sum(glyph["ax"] for glyph in self.shape(source, pair))
-                self.assertEqual(built_advance - source_advance, added_space)
+                source_advance = sum(
+                    glyph["ax"] for glyph in self.shape(DEFAULT_SOURCE_DIR / source.name, pair)
+                )
+                self.assertEqual(built_advance - source_advance, added_space - SPACING_REDUCTION)
 
     @requires_harfbuzz
     def test_text_length_is_constant_across_weights(self):
@@ -309,10 +337,6 @@ class DuoSansTests(unittest.TestCase):
                 for tag in ("cmap", "glyf", "hmtx", "GDEF"):
                     # Recompile both sides so cmap subtable packing is normalized.
                     self.assertEqual(font[tag].compile(font), source[tag].compile(source), tag)
-                if italic:
-                    add_italic_te_kerning(source)
-                voice = "casual" if variant == "casual" or (variant == "duo" and italic) else "linear"
-                add_collision_kerning(source, voice, italic)
                 self.assertEqual(
                     font["GPOS"].compile(font), source["GPOS"].compile(source), "GPOS"
                 )
