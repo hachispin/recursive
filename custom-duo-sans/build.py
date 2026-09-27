@@ -19,8 +19,13 @@ from fontTools.otlLib.builder import (
     buildPairPosGlyphsSubtable,
     buildValue,
 )
+from fontTools.pens.cu2quPen import Cu2QuPen
+from fontTools.pens.pointPen import PointToSegmentPen
+from fontTools.pens.recordingPen import RecordingPen
+from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.ttLib import TTFont
 from fontTools.ttLib.tables import otTables
+from fontTools.ufoLib.glifLib import readGlyphFromString
 from fontTools.varLib.featureVars import buildFeatureRecord, sortFeatureList
 
 
@@ -33,7 +38,7 @@ FAMILIES = {
     "linear": "Recursive Linear Sans",
     "casual": "Recursive Casual Sans",
 }
-BUILD_VERSION = "1.096"
+BUILD_VERSION = "1.099"
 SPACING_REDUCTION = 20
 SLASH_ADVANCE_REDUCTION = 80
 WEIGHTS = {
@@ -127,21 +132,153 @@ def add_time_colons(font: TTFont) -> None:
     sortFeatureList(gsub)
 
 
+ARCHIVED_F_LAYERS = {
+    "linear": ("glyphs.45degrees", "glyphs.45degrees", "glyphs.background"),
+    "casual": ("glyphs.background", "glyphs.background", "glyphs.background"),
+}
+ARCHIVED_F_MASTERS = ("A", "B", "C")
+ARCHIVED_F_LOCATIONS = (250, 800, 900)
+# User-facing weights mapped to the source designspace's interpolation values.
+ARCHIVED_F_WEIGHT_MAP = {
+    300: 250, 400: 450, 500: 533, 600: 616,
+    700: 700, 800: 800, 900: 850, 1000: 900,
+}
+
+
+@lru_cache(maxsize=None)
+def f_master(voice: str, master: int, swash: bool) -> list:
+    """Read a slanted swash or archived long-f UFO master."""
+    index = ARCHIVED_F_LOCATIONS.index(master)
+    letter = ARCHIVED_F_MASTERS[index]
+    style = voice.title()
+    layer = "glyphs" if swash else ARCHIVED_F_LAYERS[voice][index]
+    path = (
+        REPO_ROOT / "src" / "ufo" / "sans"
+        / f"Recursive Sans-{style} {letter} Slanted.ufo" / layer / "f.italic.glif"
+    )
+    pen = RecordingPen()
+    readGlyphFromString(path.read_text(), pointPen=PointToSegmentPen(pen))
+    return pen.value
+
+
+def plain_f_bar_center(font: TTFont) -> float:
+    """Locate the two horizontal edges of the source italic f crossbar."""
+    glyph = font["glyf"]["f"]
+    edges = set()
+    start = 0
+    for end in glyph.endPtsOfContours:
+        for index in range(start, end + 1):
+            next_index = start if index == end else index + 1
+            x1, y1 = glyph.coordinates[index]
+            x2, y2 = glyph.coordinates[next_index]
+            if (
+                glyph.flags[index] & 1 and glyph.flags[next_index] & 1
+                and y1 == y2 and 250 <= y1 <= 550 and abs(x2 - x1) >= 25
+            ):
+                edges.add(y1)
+        start = end + 1
+    if len(edges) != 2:
+        raise ValueError(f"Expected two plain f bar edges, found {sorted(edges)}")
+    return sum(edges) / 2
+
+
+def aligned_f_glyph(voice: str, weight: int, swash: bool, target_bar_center: float):
+    """Interpolate the f masters and align their separate bar contour."""
+    location = ARCHIVED_F_WEIGHT_MAP[weight]
+    lower, upper = (
+        (250, 800) if location <= 800 else (800, 900)
+    )
+    fraction = (location - lower) / (upper - lower)
+    left = f_master(voice, lower, swash)
+    right = f_master(voice, upper, swash)
+    if len(left) != len(right):
+        raise ValueError("Italic f masters have incompatible outlines")
+
+    interpolated = []
+    for (command, first), (other_command, second) in zip(left, right):
+        if command != other_command or len(first) != len(second):
+            raise ValueError("Italic f masters have incompatible contours")
+        points = tuple(
+            tuple(round(a + (b - a) * fraction) for a, b in zip(p, q))
+            for p, q in zip(first, second)
+        )
+        interpolated.append((command, points))
+
+    # Both source forms have a separate bar contour. The swash puts it second.
+    bar_contour = 1 if swash else 0
+    bar_points = []
+    contour = 0
+    for command, points in interpolated:
+        if contour == bar_contour:
+            bar_points.extend(points)
+        if command == "closePath":
+            contour += 1
+    if contour != 2 or not bar_points:
+        raise ValueError("Expected separate stem and bar contours for italic f")
+    bar_center = (min(y for _, y in bar_points) + max(y for _, y in bar_points)) / 2
+    bar_shift = round(target_bar_center - bar_center)
+
+    pen = TTGlyphPen(None)
+    quadratic = Cu2QuPen(pen, max_err=1, reverse_direction=True)
+    contour = 0
+    for command, points in interpolated:
+        if contour == bar_contour:
+            points = tuple((x, y + bar_shift) for x, y in points)
+        getattr(quadratic, command)(*points)
+        if command == "closePath":
+            contour += 1
+    return pen.glyph()
+
+
+def configure_italic_f_outlines(font: TTFont, voice: str, weight: int) -> None:
+    """Make swash f the default and retain the long and plain forms."""
+    target_bar_center = plain_f_bar_center(font)
+    glyf = font["glyf"]
+    glyf["f.simple"] = deepcopy(glyf["f"])
+    for name, swash in (("f", True), ("f.italic", False)):
+        glyf[name] = aligned_f_glyph(voice, weight, swash, target_bar_center)
+        glyf[name].recalcBounds(glyf)
+        advance, _ = font["hmtx"][name]
+        font["hmtx"][name] = (advance, glyf[name].xMin)
+
+    # f.simple was a component of f and had no independent mark anchors.
+    # Give it the plain f's anchors, then exchange the swash/long-f anchors.
+    order = font.getReverseGlyphMap()
+    for lookup in font["GPOS"].table.LookupList.Lookup:
+        if lookup.LookupType != 4:
+            continue
+        for subtable in lookup.SubTable:
+            names = subtable.BaseCoverage.glyphs
+            if "f" not in names or "f.simple" in names:
+                continue
+            records = dict(zip(names, subtable.BaseArray.BaseRecord))
+            plain_record = deepcopy(records["f"])
+            records["f.simple"] = plain_record
+            if "f.italic" in records:
+                records["f"] = deepcopy(records["f.italic"])
+                records["f.italic"] = deepcopy(plain_record)
+            subtable.BaseCoverage.glyphs = sorted(records, key=order.__getitem__)
+            subtable.BaseArray.BaseRecord = [records[name] for name in subtable.BaseCoverage.glyphs]
+            subtable.BaseArray.BaseCount = len(records)
+
+
 def configure_italic_f(font: TTFont) -> None:
-    """Keep plain f as the default, with the swash and ligatures opt-in."""
+    """Expose the long f with ss03 and original plain f with ss14."""
     gsub = font["GSUB"].table
-    if any(r.FeatureTag == "ss13" for r in gsub.FeatureList.FeatureRecord):
-        raise ValueError("The italic source already uses ss13")
+    if any(r.FeatureTag in ("ss13", "ss14") for r in gsub.FeatureList.FeatureRecord):
+        raise ValueError("The italic source already uses ss13 or ss14")
     params = otTables.FeatureParamsStylisticSet()
     params.Version = 0
     params.UINameID = font["name"].addName("Italic fi/ffi ligatures")
     ligature_indices = set()
-    for record in gsub.FeatureList.FeatureRecord:
+    long_f_indices = set()
+    for feature_index, record in enumerate(gsub.FeatureList.FeatureRecord):
         if record.FeatureTag == "ss03":
-            set_name(font, record.Feature.FeatureParams.UINameID, "Swash f")
+            long_f_indices.add(feature_index)
+            set_name(font, record.Feature.FeatureParams.UINameID, "Long descender f")
             for index in record.Feature.LookupListIndex:
                 for subtable in gsub.LookupList.Lookup[index].SubTable:
-                    # Use the existing swash with its own spacing and mark anchors.
+                    # The former swash glyph slot now holds the long f.
                     for name in ("f", "f.mono", "f.simple"):
                         subtable.mapping[name] = "f.italic"
         elif record.FeatureTag == "liga":
@@ -165,6 +302,25 @@ def configure_italic_f(font: TTFont) -> None:
                         rule.Component = list(components)
                         rules.append(rule)
                 subtable.ligatures[first] = rules
+
+    lookup_index = len(gsub.LookupList.Lookup)
+    replacement = SingleSubstBuilder(font, None)
+    replacement.mapping["f"] = "f.simple"
+    gsub.LookupList.Lookup.append(replacement.build())
+    gsub.LookupList.LookupCount += 1
+    original_index = len(gsub.FeatureList.FeatureRecord)
+    original_feature = buildFeatureRecord("ss14", [lookup_index])
+    original_feature.Feature.FeatureParams = deepcopy(params)
+    original_feature.Feature.FeatureParams.UINameID = font["name"].addName("Original italic f")
+    gsub.FeatureList.FeatureRecord.append(original_feature)
+    gsub.FeatureList.FeatureCount += 1
+    for script_record in gsub.ScriptList.ScriptRecord:
+        script = script_record.Script
+        languages = [script.DefaultLangSys] + [r.LangSys for r in script.LangSysRecord]
+        for language in languages:
+            if language is not None and long_f_indices.intersection(language.FeatureIndex):
+                language.FeatureIndex.append(original_index)
+                language.FeatureCount = len(language.FeatureIndex)
     sortFeatureList(gsub)
 
 
@@ -269,12 +425,17 @@ def add_collision_kerning(font: TTFont, source_dir: Path = DEFAULT_SOURCE_DIR) -
     lookup = kern_lookup(font)
     cmap = font.getBestCmap()
     pairs = {}
+    italic_f_forms = ("f.simple", "f.italic") if font["OS/2"].fsSelection & 1 else ()
     for pair, target in collision_targets(source_dir).items():
         left, right = (cmap[ord(character)] for character in pair)
         # The reduced glyph advance would remove part of this safety gap.
-        pairs[(left, right)] = (
-            buildValue({"XAdvance": target + SPACING_REDUCTION}), None
-        )
+        value = (buildValue({"XAdvance": target + SPACING_REDUCTION}), None)
+        # Both italic alternates use the same target as the default long f.
+        left_forms = (left, *italic_f_forms) if left == "f" else (left,)
+        right_forms = (right, *italic_f_forms) if right == "f" else (right,)
+        for left_form in left_forms:
+            for right_form in right_forms:
+                pairs[(left_form, right_form)] = value
     lookup.SubTable.insert(0, buildPairPosGlyphsSubtable(pairs, font.getReverseGlyphMap()))
     lookup.SubTableCount = len(lookup.SubTable)
 
@@ -423,6 +584,8 @@ def build_face(
     source_path = source_dir / SOURCE_FILES[variant][weight][1 if italic else 0]
     font = TTFont(source_path, recalcTimestamp=False, lazy=False)
     if italic:
+        voice = "casual" if variant in ("duo", "casual") else "linear"
+        configure_italic_f_outlines(font, voice, weight)
         configure_italic_f(font)
         add_italic_te_kerning(font)
     add_collision_kerning(font, source_dir)

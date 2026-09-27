@@ -19,15 +19,20 @@ mastered static Linear or Casual Italic sources. Their single-storey `a` and `g`
 are baked into the base glyphs, rather than depending on an application to
 activate the `rvrn` OpenType feature.
 
-Italic `f` uses its original plain form by default. Enable **`ss03` (Swash f)**
-to use Recursive's existing proportional swash (`f.italic`). Both forms retain
-their original outlines, spacing, and accent anchors.
+Italic `f` uses Recursive's swash outline by default. Enable **`ss03` (Long
+descender f)** for the archived non-swash long form (`f.italic`), or **`ss14`
+(Original italic f)** for the former plain form (`f.simple`). Linear and Casual
+italics use their matching slanted A/B/C masters, interpolated for each static
+weight. All three crossbars align with the former plain `f` at each weight.
+The forms share the same advance width and measured collision pair spacing, and
+support mark attachment. If both `ss03` and `ss14` are enabled, `ss03` selects
+the long form.
 
-Italic `fi` and `ffi` ligatures remain off by default with either form of `f`.
+Italic `fi` and `ffi` ligatures remain off by default with any form of `f`.
 Enable **`ss13` (Italic fi/ffi ligatures)** to
 use the original plain-form ligatures. These rules live in `ss13` instead of
 [`liga`, which shapers normally enable automatically](https://learn.microsoft.com/en-us/typography/opentype/spec/features_ko#tag-liga).
-When both `ss03` and `ss13` are enabled, standalone `f` uses the swash while
+When both `ss03` and `ss13` are enabled, standalone `f` uses the long form while
 `fi`/`ffi` use the original plain-form ligatures. Neither feature enables code
 ligatures, which remain under `dlig`. Roman faces retain their original behavior.
 
@@ -37,8 +42,9 @@ includes accented `t` forms but excludes the unrelated `pi` glyph from the
 source kerning class. Roman `te` spacing remains unchanged.
 
 Some heavy source masters let adjacent glyphs overlap, especially Casual pairs
-such as `Q)`, `qj`, and `Lj`. These builds add measured pair kerning to give
-those combinations a small gap. Glyph outlines stay intact.
+such as `Q)`, `qj`, and `Lj`. The restored long `f` also needs extra room before
+some following glyphs in heavy Linear italics. These builds add measured pair
+kerning to give those combinations a small gap. Glyph outlines stay intact.
 The adjustments are listed in [`collision_kerning.json`](collision_kerning.json).
 For each listed pair, the build uses the widest measured safe result in every
 family, weight, and slope. This prevents those collision fixes from changing

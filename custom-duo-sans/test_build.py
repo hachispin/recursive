@@ -22,9 +22,11 @@ from build import (
     add_italic_te_kerning,
     build_face,
     collision_targets,
+    configure_italic_f_outlines,
     kern_lookup,
     narrow_slash,
     pair_kerning,
+    plain_f_bar_center,
     reduce_spacing,
     validate_face,
 )
@@ -43,9 +45,11 @@ class DuoSansTests(unittest.TestCase):
         output = Path(temporary.name)
         (output / "ttf").mkdir()
         (output / "reference").mkdir()
+        (output / "plain-reference").mkdir()
         cls.faces = []
         cls.configurations = []
         references = {}
+        cls.plain_references = {}
         for variant in FAMILIES:
             for weight in WEIGHTS:
                 for italic in (False, True):
@@ -55,11 +59,22 @@ class DuoSansTests(unittest.TestCase):
                         reference = output / "reference" / source.name
                         with TTFont(source) as font:
                             if italic:
+                                voice = "casual" if "Csl" in source.name else "linear"
+                                configure_italic_f_outlines(font, voice, weight)
                                 add_italic_te_kerning(font)
                             add_collision_kerning(font)
                             reduce_spacing(font)
                             narrow_slash(font)
                             font.save(reference)
+                        if italic:
+                            plain_reference = output / "plain-reference" / source.name
+                            with TTFont(source) as plain_font:
+                                add_italic_te_kerning(plain_font)
+                                add_collision_kerning(plain_font)
+                                reduce_spacing(plain_font)
+                                narrow_slash(plain_font)
+                                plain_font.save(plain_reference)
+                            cls.plain_references[source.name] = plain_reference
                         references[source] = reference
                     reference = references[source]
                     cls.faces.append((path, reference))
@@ -93,6 +108,8 @@ class DuoSansTests(unittest.TestCase):
                     if name in ("slash", "slash.case", "uni2215"):
                         expected -= SLASH_ADVANCE_REDUCTION
                         left_bearing -= SLASH_ADVANCE_REDUCTION // 2
+                    if name in ("f", "f.italic") and path.name.endswith("Italic.ttf"):
+                        left_bearing = font["glyf"][name].xMin
                     self.assertEqual(font["hmtx"][name], (expected, left_bearing))
                 self.assertEqual(
                     font["hhea"].advanceWidthMax,
@@ -248,9 +265,10 @@ class DuoSansTests(unittest.TestCase):
                     )
                     if path.name.endswith("Italic.ttf"):
                         self.assertEqual(self.shape(path, "f", "ss03=1", options)[0]["g"], "f.italic")
+                        self.assertEqual(self.shape(path, "f", "ss14=1", options)[0]["g"], "f.simple")
 
     @requires_harfbuzz
-    def test_plain_f_is_the_italic_default_and_ss03_enables_swash(self):
+    def test_swash_f_is_the_italic_default_and_alternates_remain_opt_in(self):
         text = "f of off coffee fluffy fi ffi fifty office gf pf yf"
         alternates = ",".join(f"aalt[{i}]=3" for i, char in enumerate(text) if char == "f")
         for path, source in self.faces:
@@ -265,9 +283,58 @@ class DuoSansTests(unittest.TestCase):
                     self.assertEqual(
                         self.shape(path, text, features), self.shape(source, text, f"liga=0,{alternates}")
                     )
-            # Plain f remains the default without any OpenType shaping at all.
+            for features in ("ss14=1", "ss14=1,liga=1"):
+                with self.subTest(face=path.name, features=features):
+                    expected_plain = self.shape(source, text, "liga=0")
+                    actual = self.shape(path, text, features)
+                    self.assertEqual([g["ax"] for g in actual], [g["ax"] for g in expected_plain])
+                    self.assertEqual(
+                        [g["g"] for g in actual],
+                        ["f.simple" if g["g"] == "f" else g["g"] for g in expected_plain],
+                    )
+            # The swash f is the cmap default even without OpenType shaping.
             shaped = self.shape(path, "f", options=("--shapers=fallback",))
             self.assertEqual(shaped[0]["g"], "f")
+
+    def test_italic_f_outlines_and_shared_advances(self):
+        for _, _, italic, path, _ in self.configurations:
+            if not italic:
+                continue
+            with self.subTest(face=path.name), TTFont(path) as font:
+                source = TTFont(DEFAULT_SOURCE_DIR / SOURCE_FILES[
+                    "casual" if path.name.startswith(("RecursiveDuo", "RecursiveCasual")) else "linear"
+                ][font["OS/2"].usWeightClass][1])
+                try:
+                    for name, bar_contour in (("f", 1), ("f.italic", 0)):
+                        glyph = font["glyf"][name]
+                        self.assertLessEqual(glyph.yMin, -185)
+                        start = 0 if bar_contour == 0 else glyph.endPtsOfContours[0] + 1
+                        end = glyph.endPtsOfContours[bar_contour] + 1
+                        bar_ys = [y for _, y in glyph.coordinates[start:end]]
+                        self.assertLessEqual(
+                            abs((min(bar_ys) + max(bar_ys)) / 2 - plain_f_bar_center(source)),
+                            1,
+                        )
+                    self.assertEqual(
+                        font["glyf"]["f.simple"].compile(font["glyf"]),
+                        source["glyf"]["f"].compile(source["glyf"]),
+                    )
+                    self.assertEqual(font["hmtx"]["f"][0], font["hmtx"]["f.simple"][0])
+                finally:
+                    source.close()
+
+    @requires_harfbuzz
+    def test_italic_f_alternates_share_collision_pair_spacing(self):
+        for path, _ in self.faces:
+            if not path.name.endswith("Italic.ttf"):
+                continue
+            for pair in ("fi", "fj", "fD", "f,", "qf", "#f", "`f", "ff"):
+                with self.subTest(face=path.name, pair=pair):
+                    widths = [
+                        sum(glyph["ax"] for glyph in self.shape(path, pair, features))
+                        for features in ("", "ss03=1", "ss14=1")
+                    ]
+                    self.assertEqual(widths, [widths[0]] * len(widths))
 
     @requires_harfbuzz
     def test_italic_ligatures_require_ss13(self):
@@ -320,6 +387,16 @@ class DuoSansTests(unittest.TestCase):
             with self.subTest(face=path.name):
                 self.assertEqual(self.shape(path, text), self.shape(source, text))
                 self.assertEqual(self.shape(path, text, "ss03=1"), self.shape(source, text, alternates))
+                plain_expected = [
+                    dict(glyph) for glyph in self.shape(self.plain_references[source.name], text)
+                ]
+                for glyph in plain_expected:
+                    if glyph["g"] == "f":
+                        glyph["g"] = "f.simple"
+                self.assertEqual(
+                    self.shape(path, text, "ss14=1"),
+                    plain_expected,
+                )
 
     @requires_harfbuzz
     def test_roman_f_and_ligatures_are_unchanged(self):
@@ -327,13 +404,13 @@ class DuoSansTests(unittest.TestCase):
         for path, source in self.faces:
             if path.name.endswith("Italic.ttf"):
                 continue
-            for features in ("", "ss03=1", "liga=1", "dlig=1", "ss13=1"):
+            for features in ("", "ss03=1", "ss14=1", "liga=1", "dlig=1", "ss13=1"):
                 with self.subTest(face=path.name, features=features):
                     self.assertEqual(self.shape(path, text, features), self.shape(source, text, features))
 
     @requires_harfbuzz
     def test_collision_pairs_share_the_largest_safe_width(self):
-        for pair in ("Q)", "qj", "Lj", "Tx", "YY", "sT", "*q"):
+        for pair in ("Q)", "qj", "Lj", "Tx", "YY", "sT", "*q", "fD", "fi", "fj", "f,", "qf", "#f", "`f"):
             safe_source_widths = []
             for voice in ("linear", "casual"):
                 for italic in (False, True):
