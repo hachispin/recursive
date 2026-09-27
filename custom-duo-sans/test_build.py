@@ -12,12 +12,19 @@ from fontTools.ttLib import TTFont
 
 from build import (
     DEFAULT_SOURCE_DIR,
+    COLLISION_KERNING,
     FAMILIES,
+    SOURCE_FILES,
+    SLASH_ADVANCE_REDUCTION,
     SPACING_REDUCTION,
     WEIGHTS,
     add_collision_kerning,
     add_italic_te_kerning,
     build_face,
+    collision_targets,
+    kern_lookup,
+    narrow_slash,
+    pair_kerning,
     reduce_spacing,
     validate_face,
 )
@@ -49,9 +56,9 @@ class DuoSansTests(unittest.TestCase):
                         with TTFont(source) as font:
                             if italic:
                                 add_italic_te_kerning(font)
-                            voice = "casual" if variant == "casual" or (variant == "duo" and italic) else "linear"
-                            add_collision_kerning(font, voice, italic)
+                            add_collision_kerning(font)
                             reduce_spacing(font)
+                            narrow_slash(font)
                             font.save(reference)
                         references[source] = reference
                     reference = references[source]
@@ -83,10 +90,47 @@ class DuoSansTests(unittest.TestCase):
             with self.subTest(face=path.name), TTFont(path) as font, TTFont(DEFAULT_SOURCE_DIR / reference.name) as source:
                 for name, (advance, left_bearing) in source["hmtx"].metrics.items():
                     expected = advance - SPACING_REDUCTION if advance else 0
+                    if name in ("slash", "slash.case", "uni2215"):
+                        expected -= SLASH_ADVANCE_REDUCTION
+                        left_bearing -= SLASH_ADVANCE_REDUCTION // 2
                     self.assertEqual(font["hmtx"][name], (expected, left_bearing))
                 self.assertEqual(
                     font["hhea"].advanceWidthMax,
                     max(advance for advance, _ in font["hmtx"].metrics.values()),
+                )
+
+    def test_all_faces_share_glyph_and_collision_pair_advances(self):
+        expected_advances = None
+        targets = collision_targets(DEFAULT_SOURCE_DIR)
+        for path, _ in self.faces:
+            with self.subTest(face=path.name), TTFont(path) as font:
+                advances = {name: width for name, (width, _) in font["hmtx"].metrics.items()}
+                if expected_advances is None:
+                    expected_advances = advances
+                self.assertEqual(advances, expected_advances)
+
+                lookup = kern_lookup(font)
+                cmap = font.getBestCmap()
+                for pair, target in targets.items():
+                    left, right = (cmap[ord(character)] for character in pair)
+                    self.assertEqual(
+                        pair_kerning(lookup, left, right),
+                        target + SPACING_REDUCTION,
+                        pair,
+                    )
+
+    @requires_harfbuzz
+    def test_slash_is_narrower_between_digits(self):
+        for path, _ in self.faces:
+            with self.subTest(face=path.name), TTFont(path) as font:
+                cmap = font.getBestCmap()
+                slash = cmap[ord("/")]
+                digit = cmap[ord("1")]
+                self.assertEqual(font["hmtx"][slash][0], 500)
+                self.assertEqual(font["hmtx"][digit][0], 580)
+                self.assertEqual(
+                    sum(glyph["ax"] for glyph in self.shape(path, "1/2")),
+                    1660,
                 )
 
     def test_cli_builds_selected_families(self):
@@ -288,32 +332,24 @@ class DuoSansTests(unittest.TestCase):
                     self.assertEqual(self.shape(path, text, features), self.shape(source, text, features))
 
     @requires_harfbuzz
-    def test_heavy_collision_pairs_gain_space(self):
-        cases = (
-            ("casual", 800, False, "Q)", 60),
-            ("casual", 800, True, "Q)", 75),
-            ("casual", 900, False, "Q)", 60),
-            ("casual", 900, True, "Q)", 75),
-            ("casual", 1000, False, "Q)", 60),
-            ("duo", 900, True, "qj", 60),
-            ("casual", 1000, True, "qj", 60),
-            ("casual", 1000, True, "Lj", 45),
-            ("casual", 1000, False, "Tx", 25),
-            ("linear", 1000, True, "YY", 35),
-            ("linear", 1000, False, "sT", 25),
-        )
-        for variant, weight, italic, pair, added_space in cases:
-            path, source = next(
-                (path, source)
-                for v, w, i, path, source in self.configurations
-                if (v, w, i) == (variant, weight, italic)
-            )
-            with self.subTest(face=path.name, pair=pair):
-                built_advance = sum(glyph["ax"] for glyph in self.shape(path, pair))
-                source_advance = sum(
-                    glyph["ax"] for glyph in self.shape(DEFAULT_SOURCE_DIR / source.name, pair)
-                )
-                self.assertEqual(built_advance - source_advance, added_space - SPACING_REDUCTION)
+    def test_collision_pairs_share_the_largest_safe_width(self):
+        for pair in ("Q)", "qj", "Lj", "Tx", "YY", "sT", "*q"):
+            safe_source_widths = []
+            for voice in ("linear", "casual"):
+                for italic in (False, True):
+                    style = "italic" if italic else "upright"
+                    source = DEFAULT_SOURCE_DIR / SOURCE_FILES[voice][400][int(italic)]
+                    source_width = sum(glyph["ax"] for glyph in self.shape(source, pair))
+                    safe_source_widths.append(
+                        source_width + COLLISION_KERNING[f"{voice}-{style}"].get(pair, 0)
+                    )
+            expected = max(safe_source_widths) - SPACING_REDUCTION
+            for path, _ in self.faces:
+                with self.subTest(face=path.name, pair=pair):
+                    self.assertEqual(
+                        sum(glyph["ax"] for glyph in self.shape(path, pair)),
+                        expected,
+                    )
 
     @requires_harfbuzz
     def test_text_length_is_constant_across_weights(self):

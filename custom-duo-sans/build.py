@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
+from functools import lru_cache
 from itertools import product
 import json
 import math
@@ -32,8 +33,9 @@ FAMILIES = {
     "linear": "Recursive Linear Sans",
     "casual": "Recursive Casual Sans",
 }
-BUILD_VERSION = "1.094"
+BUILD_VERSION = "1.096"
 SPACING_REDUCTION = 20
+SLASH_ADVANCE_REDUCTION = 80
 WEIGHTS = {
     300: "Light",
     400: "Regular",
@@ -71,9 +73,8 @@ SOURCE_FILES["duo"] = {
     for weight in WEIGHTS
 }
 
-# Measured ASCII collisions in the upstream heavy masters. Use the largest
-# correction for every weight of a given genre and slope, preserving the
-# source's constant text length across the weight range.
+# Measured ASCII collisions in the upstream heavy masters. The largest safe
+# resulting pair width is shared by every genre, slope, and weight.
 COLLISION_KERNING = json.loads((HERE / "collision_kerning.json").read_text())
 
 
@@ -214,12 +215,8 @@ def add_italic_te_kerning(font: TTFont) -> None:
     lookup.SubTableCount = len(lookup.SubTable)
 
 
-def add_collision_kerning(font: TTFont, voice: str, italic: bool) -> None:
-    """Give measured heavy-master collisions a small gap without changing outlines."""
-    style = "italic" if italic else "upright"
-    corrections = COLLISION_KERNING.get(f"{voice}-{style}")
-    if not corrections:
-        return
+def kern_lookup(font: TTFont):
+    """Find the source font's single kerning lookup."""
     gpos = font["GPOS"].table
     kern_indices = {
         index
@@ -229,28 +226,54 @@ def add_collision_kerning(font: TTFont, voice: str, italic: bool) -> None:
     }
     if len(kern_indices) != 1:
         raise ValueError("Expected exactly one kerning lookup")
-    lookup = gpos.LookupList.Lookup[kern_indices.pop()]
-    pairs = {}
+    return gpos.LookupList.Lookup[kern_indices.pop()]
+
+
+def pair_kerning(lookup, left: str, right: str) -> int:
+    for subtable in lookup.SubTable:
+        if subtable.Format == 1 and left in subtable.Coverage.glyphs:
+            pair_set = subtable.PairSet[subtable.Coverage.glyphs.index(left)]
+            record = next((r for r in pair_set.PairValueRecord if r.SecondGlyph == right), None)
+            if record is not None:
+                return (getattr(record.Value1, "XAdvance", 0) or 0) if record.Value1 else 0
+        elif subtable.Format == 2 and left in subtable.Coverage.glyphs:
+            left_class = subtable.ClassDef1.classDefs.get(left, 0)
+            right_class = subtable.ClassDef2.classDefs.get(right, 0)
+            value = subtable.Class1Record[left_class].Class2Record[right_class].Value1
+            return (getattr(value, "XAdvance", 0) or 0) if value else 0
+    return 0
+
+
+@lru_cache(maxsize=None)
+def collision_targets(source_dir: Path) -> dict[str, int]:
+    """Choose the largest safe kerning value across all four source styles."""
+    all_pairs = set().union(*(set(corrections) for corrections in COLLISION_KERNING.values()))
+    targets = {}
+    for voice in ("linear", "casual"):
+        for italic in (False, True):
+            style = "italic" if italic else "upright"
+            source = source_dir / SOURCE_FILES[voice][400][int(italic)]
+            with TTFont(source) as font:
+                lookup = kern_lookup(font)
+                cmap = font.getBestCmap()
+                corrections = COLLISION_KERNING[f"{voice}-{style}"]
+                for pair in all_pairs:
+                    left, right = (cmap[ord(character)] for character in pair)
+                    safe = pair_kerning(lookup, left, right) + corrections.get(pair, 0)
+                    targets[pair] = max(targets.get(pair, safe), safe)
+    return targets
+
+
+def add_collision_kerning(font: TTFont, source_dir: Path = DEFAULT_SOURCE_DIR) -> None:
+    """Give collision pairs one safe width across all styles and weights."""
+    lookup = kern_lookup(font)
     cmap = font.getBestCmap()
-    for pair, extra in corrections.items():
+    pairs = {}
+    for pair, target in collision_targets(source_dir).items():
         left, right = (cmap[ord(character)] for character in pair)
-        original = 0
-        for subtable in lookup.SubTable:
-            if subtable.Format == 1 and left in subtable.Coverage.glyphs:
-                pair_set = subtable.PairSet[subtable.Coverage.glyphs.index(left)]
-                record = next((r for r in pair_set.PairValueRecord if r.SecondGlyph == right), None)
-                if record is not None:
-                    original = (getattr(record.Value1, "XAdvance", 0) or 0) if record.Value1 else 0
-                    break
-            elif subtable.Format == 2 and left in subtable.Coverage.glyphs:
-                left_class = subtable.ClassDef1.classDefs.get(left, 0)
-                right_class = subtable.ClassDef2.classDefs.get(right, 0)
-                value = subtable.Class1Record[left_class].Class2Record[right_class].Value1
-                original = (getattr(value, "XAdvance", 0) or 0) if value else 0
-                break
         # The reduced glyph advance would remove part of this safety gap.
         pairs[(left, right)] = (
-            buildValue({"XAdvance": original + extra + SPACING_REDUCTION}), None
+            buildValue({"XAdvance": target + SPACING_REDUCTION}), None
         )
     lookup.SubTable.insert(0, buildPairPosGlyphsSubtable(pairs, font.getReverseGlyphMap()))
     lookup.SubTableCount = len(lookup.SubTable)
@@ -265,6 +288,35 @@ def reduce_spacing(font: TTFont) -> None:
                 raise ValueError(f"{name} is too narrow for the spacing reduction")
             metrics[name] = (advance - SPACING_REDUCTION, left_bearing)
     font["hhea"].recalc(font)
+
+
+def narrow_slash(font: TTFont) -> None:
+    """Tighten the slash while retaining its original stroke and code ligatures."""
+    glyf = font["glyf"]
+    metrics = font["hmtx"].metrics
+    slash = glyf["slash"]
+    shift = SLASH_ADVANCE_REDUCTION // 2
+    for index, (x, y) in enumerate(slash.coordinates):
+        slash.coordinates[index] = (x - shift, y)
+    slash.recalcBounds(glyf)
+    width, _ = metrics["slash"]
+    metrics["slash"] = (width - SLASH_ADVANCE_REDUCTION, slash.xMin)
+
+    # These are alternate presentations of the same punctuation mark.
+    for name in ("slash.case", "uni2215"):
+        glyph = glyf[name]
+        glyph.recalcBounds(glyf)
+        width, _ = metrics[name]
+        metrics[name] = (width - SLASH_ADVANCE_REDUCTION, glyph.xMin)
+
+    # Opt-in code ligatures have their own spacing and should retain their
+    # original outlines after the shared slash component moves.
+    for name in ("astr_slash.code", "slash_astr.code", "slash_slash.code", "slash_slash_slash.code"):
+        glyph = glyf[name]
+        for component in glyph.components:
+            if component.glyphName == "slash":
+                component.x += shift
+        glyph.recalcBounds(glyf)
 
 
 def set_name(font: TTFont, name_id: int, value: str) -> None:
@@ -373,9 +425,9 @@ def build_face(
     if italic:
         configure_italic_f(font)
         add_italic_te_kerning(font)
-    voice = "casual" if variant == "casual" or (variant == "duo" and italic) else "linear"
-    add_collision_kerning(font, voice, italic)
+    add_collision_kerning(font, source_dir)
     reduce_spacing(font)
+    narrow_slash(font)
     add_time_colons(font)
     update_metadata(font, weight, italic, variant)
     suffix = "Italic" if italic else ""
@@ -441,11 +493,20 @@ def main() -> None:
     unknown_weights = sorted(set(args.weights) - set(WEIGHTS))
     if unknown_weights:
         raise SystemExit(f"Unsupported weights: {', '.join(map(str, unknown_weights))}")
-    missing_sources = [
-        args.source_dir / filename
+    required_sources = {
+        filename
         for variant in args.variants
         for weight in args.weights
         for filename in SOURCE_FILES[variant][weight]
+    }
+    required_sources.update(
+        SOURCE_FILES[voice][400][int(italic)]
+        for voice in ("linear", "casual")
+        for italic in (False, True)
+    )
+    missing_sources = [
+        args.source_dir / filename
+        for filename in sorted(required_sources)
         if not (args.source_dir / filename).is_file()
     ]
     if missing_sources:
