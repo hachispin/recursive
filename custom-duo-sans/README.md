@@ -31,9 +31,17 @@ When both `ss03` and `ss13` are enabled, standalone `f` uses the swash while
 `fi`/`ffi` use the original plain-form ligatures. Neither feature enables code
 ligatures, which remain under `dlig`. Roman faces retain their original behavior.
 
-Italic faces tighten `t` followed by `e` or an accented `e` by 20 font units.
-The exception includes accented `t` forms but excludes the unrelated `pi` glyph
-from the source kerning class. Roman `te` spacing remains unchanged.
+Italic faces move `e` or an accented `e` 20 font units left after `t`, making
+the pair look tighter without changing its total advance width. The exception
+includes accented `t` forms but excludes the unrelated `pi` glyph from the
+source kerning class. Roman `te` spacing remains unchanged.
+
+Some heavy source masters let adjacent glyphs overlap, especially Casual pairs
+such as `Q)`, `qj`, and `Lj`. These builds add measured pair kerning to give
+those combinations a small gap. Glyph outlines and advance widths stay intact.
+The adjustments are listed in [`collision_kerning.json`](collision_kerning.json).
+Each pair gets the same adjustment at every weight of its genre and slope, so
+text keeps the same length when the weight changes.
 
 Colons between digits are vertically centered automatically: `12:34`, `9:05`,
 `12:34:56`, and numeric ratios such as `3:2`. The build includes a `calt`

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from copy import deepcopy
 from itertools import product
+import json
 import math
 import shutil
 from pathlib import Path
@@ -68,6 +69,11 @@ SOURCE_FILES["duo"] = {
     weight: (SOURCE_FILES["linear"][weight][0], SOURCE_FILES["casual"][weight][1])
     for weight in WEIGHTS
 }
+
+# Measured ASCII collisions in the upstream heavy masters. Use the largest
+# correction for every weight of a given genre and slope, preserving the
+# source's constant text length across the weight range.
+COLLISION_KERNING = json.loads((HERE / "collision_kerning.json").read_text())
 
 
 def add_time_colons(font: TTFont) -> None:
@@ -161,7 +167,7 @@ def configure_italic_f(font: TTFont) -> None:
 
 
 def add_italic_te_kerning(font: TTFont) -> None:
-    """Tighten italic t-e pairs without applying the t class's pi member."""
+    """Shift italic e toward t without changing their combined advance width."""
     gpos = font["GPOS"].table
     kern_indices = {
         index
@@ -196,14 +202,53 @@ def add_italic_te_kerning(font: TTFont) -> None:
         for name in glyph_order
         if subtable.ClassDef2.classDefs.get(name, 0) == right_class
     }
-    adjustment = buildValue({"XAdvance": -20})
+    adjustment = buildValue({"XPlacement": -20})
     pairs = {
-        (left, right): (adjustment, None)
+        (left, right): (None, adjustment)
         for left in left_glyphs
         for right in right_glyphs
     }
     exception = buildPairPosGlyphsSubtable(pairs, font.getReverseGlyphMap())
     lookup.SubTable.insert(0, exception)
+    lookup.SubTableCount = len(lookup.SubTable)
+
+
+def add_collision_kerning(font: TTFont, voice: str, italic: bool) -> None:
+    """Give measured heavy-master collisions a small gap without changing outlines."""
+    style = "italic" if italic else "upright"
+    corrections = COLLISION_KERNING.get(f"{voice}-{style}")
+    if not corrections:
+        return
+    gpos = font["GPOS"].table
+    kern_indices = {
+        index
+        for record in gpos.FeatureList.FeatureRecord
+        if record.FeatureTag == "kern"
+        for index in record.Feature.LookupListIndex
+    }
+    if len(kern_indices) != 1:
+        raise ValueError("Expected exactly one kerning lookup")
+    lookup = gpos.LookupList.Lookup[kern_indices.pop()]
+    pairs = {}
+    cmap = font.getBestCmap()
+    for pair, extra in corrections.items():
+        left, right = (cmap[ord(character)] for character in pair)
+        original = 0
+        for subtable in lookup.SubTable:
+            if subtable.Format == 1 and left in subtable.Coverage.glyphs:
+                pair_set = subtable.PairSet[subtable.Coverage.glyphs.index(left)]
+                record = next((r for r in pair_set.PairValueRecord if r.SecondGlyph == right), None)
+                if record is not None:
+                    original = (getattr(record.Value1, "XAdvance", 0) or 0) if record.Value1 else 0
+                    break
+            elif subtable.Format == 2 and left in subtable.Coverage.glyphs:
+                left_class = subtable.ClassDef1.classDefs.get(left, 0)
+                right_class = subtable.ClassDef2.classDefs.get(right, 0)
+                value = subtable.Class1Record[left_class].Class2Record[right_class].Value1
+                original = (getattr(value, "XAdvance", 0) or 0) if value else 0
+                break
+        pairs[(left, right)] = (buildValue({"XAdvance": original + extra}), None)
+    lookup.SubTable.insert(0, buildPairPosGlyphsSubtable(pairs, font.getReverseGlyphMap()))
     lookup.SubTableCount = len(lookup.SubTable)
 
 
@@ -313,6 +358,8 @@ def build_face(
     if italic:
         configure_italic_f(font)
         add_italic_te_kerning(font)
+    voice = "casual" if variant == "casual" or (variant == "duo" and italic) else "linear"
+    add_collision_kerning(font, voice, italic)
     add_time_colons(font)
     update_metadata(font, weight, italic, variant)
     suffix = "Italic" if italic else ""

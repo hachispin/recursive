@@ -14,6 +14,7 @@ from build import (
     DEFAULT_SOURCE_DIR,
     FAMILIES,
     WEIGHTS,
+    add_collision_kerning,
     add_italic_te_kerning,
     build_face,
     validate_face,
@@ -222,11 +223,22 @@ class DuoSansTests(unittest.TestCase):
         for _, _, italic, path, _ in self.configurations:
             for pair in pairs:
                 with self.subTest(face=path.name, pair=pair):
-                    kerned = sum(glyph["ax"] for glyph in self.shape(path, pair))
-                    unkerned = sum(glyph["ax"] for glyph in self.shape(path, pair, "kern=0"))
-                    self.assertEqual(kerned - unkerned, -20 if italic else 0)
+                    kerned = self.shape(path, pair)
+                    unkerned = self.shape(path, pair, "kern=0")
+                    self.assertEqual(sum(g["ax"] for g in kerned), sum(g["ax"] for g in unkerned))
+                    self.assertEqual(kerned[1]["dx"] - unkerned[1]["dx"], -20 if italic else 0)
             with self.subTest(face=path.name, pair="πe"):
                 self.assertEqual(self.shape(path, "πe"), self.shape(path, "πe", "kern=0"))
+
+        for variant in FAMILIES:
+            for weight in WEIGHTS:
+                widths = [
+                    sum(g["ax"] for g in self.shape(path, "te"))
+                    for v, w, _, path, _ in self.configurations
+                    if (v, w) == (variant, weight)
+                ]
+                with self.subTest(variant=variant, weight=weight):
+                    self.assertEqual(widths, [widths[0], widths[0]])
 
     @requires_harfbuzz
     def test_both_f_forms_preserve_accent_positioning(self):
@@ -249,15 +261,58 @@ class DuoSansTests(unittest.TestCase):
                 with self.subTest(face=path.name, features=features):
                     self.assertEqual(self.shape(path, text, features), self.shape(source, text, features))
 
-    def test_original_outlines_character_maps_and_positioning_are_preserved(self):
-        for path, source_path in self.faces:
+    @requires_harfbuzz
+    def test_heavy_collision_pairs_gain_space(self):
+        cases = (
+            ("casual", 800, False, "Q)", 60),
+            ("casual", 800, True, "Q)", 75),
+            ("casual", 900, False, "Q)", 60),
+            ("casual", 900, True, "Q)", 75),
+            ("casual", 1000, False, "Q)", 60),
+            ("duo", 900, True, "qj", 60),
+            ("casual", 1000, True, "qj", 60),
+            ("casual", 1000, True, "Lj", 45),
+            ("casual", 1000, False, "Tx", 25),
+            ("linear", 1000, True, "YY", 35),
+            ("linear", 1000, False, "sT", 25),
+        )
+        for variant, weight, italic, pair, added_space in cases:
+            path, source = next(
+                (path, source)
+                for v, w, i, path, source in self.configurations
+                if (v, w, i) == (variant, weight, italic)
+            )
+            with self.subTest(face=path.name, pair=pair):
+                built_advance = sum(glyph["ax"] for glyph in self.shape(path, pair))
+                source_advance = sum(glyph["ax"] for glyph in self.shape(source, pair))
+                self.assertEqual(built_advance - source_advance, added_space)
+
+    @requires_harfbuzz
+    def test_text_length_is_constant_across_weights(self):
+        text = "Q) qj L+ P. Lj YY Quickly jumping past Q)"
+        for variant in FAMILIES:
+            for italic in (False, True):
+                advances = []
+                for weight in WEIGHTS:
+                    path = next(
+                        path for v, w, i, path, _ in self.configurations
+                        if (v, w, i) == (variant, weight, italic)
+                    )
+                    advances.append(sum(glyph["ax"] for glyph in self.shape(path, text)))
+                with self.subTest(variant=variant, italic=italic):
+                    self.assertEqual(advances, [advances[0]] * len(WEIGHTS))
+
+    def test_original_outlines_character_maps_and_other_positioning_are_preserved(self):
+        for variant, weight, italic, path, source_path in self.configurations:
             with self.subTest(face=path.name), TTFont(path) as font, TTFont(source_path) as source:
                 self.assertEqual(font.getGlyphOrder(), source.getGlyphOrder())
                 for tag in ("cmap", "glyf", "hmtx", "GDEF"):
                     # Recompile both sides so cmap subtable packing is normalized.
                     self.assertEqual(font[tag].compile(font), source[tag].compile(source), tag)
-                if path.name.endswith("Italic.ttf"):
+                if italic:
                     add_italic_te_kerning(source)
+                voice = "casual" if variant == "casual" or (variant == "duo" and italic) else "linear"
+                add_collision_kerning(source, voice, italic)
                 self.assertEqual(
                     font["GPOS"].compile(font), source["GPOS"].compile(source), "GPOS"
                 )
