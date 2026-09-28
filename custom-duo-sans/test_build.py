@@ -338,6 +338,23 @@ class DuoSansTests(unittest.TestCase):
                         for features in ("", "ss03=1", "ss14=1")
                     ]
                     self.assertEqual(widths, [widths[0]] * len(widths))
+                    if pair in ("fi", "fj"):
+                        self.assertEqual(self.shape(path, pair)[1]["dx"], 0)
+                        self.assertEqual(
+                            self.shape(path, pair, "ss03=1")[1]["dx"],
+                            {"fi": 80, "fj": 35}[pair],
+                        )
+                        self.assertEqual(
+                            self.shape(path, pair, "ss14=1")[1]["dx"],
+                            20 if pair == "fi" else 0,
+                        )
+            # A following letter must sit at its normal distance from i.
+            fil = self.shape(path, "fil")
+            il = self.shape(path, "il")
+            self.assertEqual(
+                [(glyph["dx"], glyph["ax"]) for glyph in fil[1:]],
+                [(glyph["dx"], glyph["ax"]) for glyph in il],
+            )
 
     @requires_harfbuzz
     def test_italic_ligatures_require_ss13(self):
@@ -402,11 +419,16 @@ class DuoSansTests(unittest.TestCase):
                 )
 
     @requires_harfbuzz
-    def test_roman_f_and_ligatures_are_unchanged(self):
+    def test_roman_fi_spacing_and_ligatures(self):
         text = "f of off coffee fi ffi fluffy"
         for path, source in self.faces:
             if path.name.endswith("Italic.ttf"):
                 continue
+            upstream = DEFAULT_SOURCE_DIR / source.name
+            self.assertEqual(
+                sum(glyph["ax"] for glyph in self.shape(path, "fi")),
+                sum(glyph["ax"] for glyph in self.shape(upstream, "fi")) - 30,
+            )
             for features in ("", "ss03=1", "ss14=1", "liga=1", "dlig=1", "ss13=1"):
                 with self.subTest(face=path.name, features=features):
                     self.assertEqual(self.shape(path, text, features), self.shape(source, text, features))

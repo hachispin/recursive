@@ -38,7 +38,7 @@ FAMILIES = {
     "linear": "Recursive Linear Sans",
     "casual": "Recursive Casual Sans",
 }
-BUILD_VERSION = "1.100"
+BUILD_VERSION = "1.101"
 SPACING_REDUCTION = 20
 SLASH_ADVANCE_REDUCTION = 80
 WEIGHTS = {
@@ -146,6 +146,30 @@ ARCHIVED_F_WEIGHT_MAP = {
     300: 250, 400: 450, 500: 533, 600: 616,
     700: 700, 800: 800, 900: 850, 1000: 900,
 }
+# The source swash f ends its upper stroke in a tight curl. Use a plain,
+# angled terminal based on the original italic f instead. Each tuple holds
+# the inner shoulder, outer tip, and two controls returning to the arch.
+SWASH_F_TOP = {
+    "linear": {
+        250: ((500, 706), (531, 743), (531, 750), (491, 760)),
+        800: ((488, 646), (535, 747), (535, 755), (485, 770)),
+        900: ((463, 564), (507, 751), (507, 757), (485, 770)),
+    },
+    "casual": {
+        250: ((502, 673), (519, 744), (518, 755), (439, 760)),
+        800: ((500, 644), (535, 744), (535, 760), (463, 770)),
+        900: ((449, 563), (479, 740), (480, 754), (436, 770)),
+    },
+}
+SWASH_F_BAR_EXTENSION = 16
+
+# The shared fi/fj advances are tight enough for the default swash and roman f.
+# Keep the archived long f's ink clearance with placement on its follower;
+# the plain ss14 f needs a smaller fi adjustment in the heaviest Casual face.
+ITALIC_F_FOLLOWER_PLACEMENT = {
+    "f.italic": {"fi": 80, "fj": 35},
+    "f.simple": {"fi": 20},
+}
 
 
 @lru_cache(maxsize=None)
@@ -162,6 +186,39 @@ def f_master(voice: str, master: int, swash: bool) -> list:
     pen = RecordingPen()
     readGlyphFromString(path.read_text(), pointPen=PointToSegmentPen(pen))
     return pen.value
+
+
+def custom_swash_f_master(voice: str, master: int) -> list:
+    """Give the swash f a plain upper terminal and a slightly longer bar."""
+    outline = f_master(voice, master, True)
+    expected_top = [
+        "curveTo", "curveTo", "lineTo", "curveTo",
+        "curveTo", "lineTo", "curveTo", "curveTo",
+    ]
+    if (
+        len(outline) != 29
+        or [command for command, _ in outline[8:16]] != expected_top
+    ):
+        raise ValueError("Unexpected swash f top contour")
+    shoulder, tip, outer_control, arch_control = SWASH_F_TOP[voice][master]
+    arch_peak = outline[15][1][-1]
+    outline = (
+        outline[:9]
+        + [("lineTo", (shoulder,)), ("lineTo", (tip,))]
+        + [("curveTo", (outer_control, arch_control, arch_peak))]
+        + outline[16:]
+    )
+    if [command for command, _ in outline[-4:-1]] != ["lineTo", "curveTo", "curveTo"]:
+        raise ValueError("Unexpected swash f bar contour")
+    # Move the three commands that form the right end, leaving the left end
+    # and the bar's vertical alignment intact.
+    for index in range(len(outline) - 4, len(outline) - 1):
+        command, points = outline[index]
+        outline[index] = (
+            command,
+            tuple((x + SWASH_F_BAR_EXTENSION, y) for x, y in points),
+        )
+    return outline
 
 
 def plain_f_bar_center(font: TTFont) -> float:
@@ -192,8 +249,12 @@ def aligned_f_glyph(voice: str, weight: int, swash: bool, target_bar_center: flo
         (250, 800) if location <= 800 else (800, 900)
     )
     fraction = (location - lower) / (upper - lower)
-    left = f_master(voice, lower, swash)
-    right = f_master(voice, upper, swash)
+    if swash:
+        left = custom_swash_f_master(voice, lower)
+        right = custom_swash_f_master(voice, upper)
+    else:
+        left = f_master(voice, lower, False)
+        right = f_master(voice, upper, False)
     if len(left) != len(right):
         raise ValueError("Italic f masters have incompatible outlines")
 
@@ -433,12 +494,19 @@ def add_collision_kerning(font: TTFont, source_dir: Path = DEFAULT_SOURCE_DIR) -
         left, right = (cmap[ord(character)] for character in pair)
         # The reduced glyph advance would remove part of this safety gap.
         value = (buildValue({"XAdvance": target + SPACING_REDUCTION}), None)
-        # Both italic alternates use the same target as the default long f.
+        # The italic alternates share the default f's pair advance.
         left_forms = (left, *italic_f_forms) if left == "f" else (left,)
         right_forms = (right, *italic_f_forms) if right == "f" else (right,)
         for left_form in left_forms:
             for right_form in right_forms:
-                pairs[(left_form, right_form)] = value
+                placement = ITALIC_F_FOLLOWER_PLACEMENT.get(left_form, {}).get(pair)
+                if placement is not None:
+                    pairs[(left_form, right_form)] = (
+                        value[0],
+                        buildValue({"XPlacement": placement}),
+                    )
+                else:
+                    pairs[(left_form, right_form)] = value
     lookup.SubTable.insert(0, buildPairPosGlyphsSubtable(pairs, font.getReverseGlyphMap()))
     lookup.SubTableCount = len(lookup.SubTable)
 

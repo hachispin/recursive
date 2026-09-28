@@ -19,14 +19,17 @@ mastered static Linear or Casual Italic sources. Their single-storey `a` and `g`
 are baked into the base glyphs, rather than depending on an application to
 activate the `rvrn` OpenType feature.
 
-Italic `f` uses Recursive's swash outline by default. Enable **`ss03` (Long
-descender f)** for the archived non-swash long form (`f.italic`), or **`ss14`
-(Original italic f)** for the former plain form (`f.simple`). Linear and Casual
-italics use their matching slanted A/B/C masters, interpolated for each static
-weight. All three crossbars align with the former plain `f` at each weight.
+Italic `f` uses Recursive's swash outline with a plain angled top terminal and
+a slightly longer right crossbar. Enable **`ss03` (Long descender f)** for the
+archived non-swash long form (`f.italic`), or **`ss14` (Original italic f)** for
+the former plain form (`f.simple`). Linear and Casual italics use their matching
+slanted A/B/C masters, interpolated for each static weight. All three crossbars
+align with the former plain `f` at each weight.
 The forms share the same advance width and measured collision pair spacing, and
 support mark attachment. If both `ss03` and `ss14` are enabled, `ss03` selects
-the long form.
+the long form. `fi` and `fj` have tighter shared pair advances in roman and
+italic. The archived long f places the following `i` or `j` to retain its ink
+clearance.
 
 Italic `fi` and `ffi` ligatures remain off by default with any form of `f`.
 Enable **`ss13` (Italic fi/ffi ligatures)** to
