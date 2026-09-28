@@ -132,6 +132,21 @@ class DuoSansTests(unittest.TestCase):
                 self.assertEqual(advances, expected_advances)
 
                 lookup = kern_lookup(font)
+                self.assertTrue(all(
+                    subtable.ValueFormat2 == 0 for subtable in lookup.SubTable
+                ))
+                gpos = font["GPOS"].table
+                placement_indices = {
+                    index
+                    for record in gpos.FeatureList.FeatureRecord
+                    if record.FeatureTag == "kern"
+                    for index in record.Feature.LookupListIndex[1:]
+                }
+                for index in placement_indices:
+                    self.assertTrue(all(
+                        subtable.ValueFormat1 == 0
+                        for subtable in gpos.LookupList.Lookup[index].SubTable
+                    ))
                 cmap = font.getBestCmap()
                 for pair, target in targets.items():
                     left, right = (cmap[ord(character)] for character in pair)
@@ -468,6 +483,30 @@ class DuoSansTests(unittest.TestCase):
                         sum(glyph["ax"] for glyph in self.shape(path, pair)),
                         expected,
                     )
+
+    @requires_harfbuzz
+    def test_adjacent_pair_adjustments_both_apply(self):
+        # The first pair must not consume the middle glyph and suppress the
+        # second. Include the italic t-e and f-alternate placement exceptions.
+        for path, _ in self.faces:
+            features_list = ("", "ss03=1", "ss14=1") if path.name.endswith("Italic.ttf") else ("",)
+            for features in features_list:
+                for text in ("arf", "afi", "rfi", "fDf", "tef"):
+                    with self.subTest(face=path.name, features=features, text=text):
+                        left = self.shape(path, text[:2], features)
+                        right = self.shape(path, text[1:], features)
+                        middle = self.shape(path, text[1], features)
+                        triple = self.shape(path, text, features)
+                        self.assertEqual(len(triple), 3)
+                        self.assertEqual(
+                            sum(glyph["ax"] for glyph in triple),
+                            sum(glyph["ax"] for glyph in left)
+                            + sum(glyph["ax"] for glyph in right)
+                            - middle[0]["ax"],
+                        )
+                        self.assertEqual(triple[1]["ax"], right[0]["ax"])
+                        if text == "tef" and path.name.endswith("Italic.ttf"):
+                            self.assertEqual(triple[1]["dx"], left[1]["dx"])
 
     @requires_harfbuzz
     def test_text_length_is_constant_across_weights(self):

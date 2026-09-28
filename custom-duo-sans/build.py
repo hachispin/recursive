@@ -392,29 +392,21 @@ def configure_italic_f(font: TTFont) -> None:
 
 def add_italic_te_kerning(font: TTFont) -> None:
     """Shift italic e toward t without changing their combined advance width."""
-    gpos = font["GPOS"].table
-    kern_indices = {
-        index
-        for record in gpos.FeatureList.FeatureRecord
-        if record.FeatureTag == "kern"
-        for index in record.Feature.LookupListIndex
-    }
+    lookup = kern_lookup(font)
     class_subtables = []
-    for index in kern_indices:
-        lookup = gpos.LookupList.Lookup[index]
-        for subtable in lookup.SubTable:
-            if subtable.Format != 2 or "t" not in subtable.Coverage.glyphs:
-                continue
-            left_class = subtable.ClassDef1.classDefs.get("t", 0)
-            right_class = subtable.ClassDef2.classDefs.get("e", 0)
-            value = subtable.Class1Record[left_class].Class2Record[right_class].Value1
-            if value is None or (getattr(value, "XAdvance", 0) or 0) != 0:
-                raise ValueError("The italic t-e class pair is no longer unkerned")
-            class_subtables.append((lookup, subtable, left_class, right_class))
+    for subtable in lookup.SubTable:
+        if subtable.Format != 2 or "t" not in subtable.Coverage.glyphs:
+            continue
+        left_class = subtable.ClassDef1.classDefs.get("t", 0)
+        right_class = subtable.ClassDef2.classDefs.get("e", 0)
+        value = subtable.Class1Record[left_class].Class2Record[right_class].Value1
+        if value is None or (getattr(value, "XAdvance", 0) or 0) != 0:
+            raise ValueError("The italic t-e class pair is no longer unkerned")
+        class_subtables.append((subtable, left_class, right_class))
     if len(class_subtables) != 1:
         raise ValueError("Expected exactly one italic t-e class pair")
 
-    lookup, subtable, left_class, right_class = class_subtables[0]
+    subtable, left_class, right_class = class_subtables[0]
     glyph_order = font.getGlyphOrder()
     left_glyphs = {
         name
@@ -432,23 +424,37 @@ def add_italic_te_kerning(font: TTFont) -> None:
         for left in left_glyphs
         for right in right_glyphs
     }
-    exception = buildPairPosGlyphsSubtable(pairs, font.getReverseGlyphMap())
-    lookup.SubTable.insert(0, exception)
-    lookup.SubTableCount = len(lookup.SubTable)
+    append_kern_pair_lookup(font, pairs)
 
 
 def kern_lookup(font: TTFont):
-    """Find the source font's single kerning lookup."""
+    """Find the original advance kerning lookup, ahead of added placement lookups."""
     gpos = font["GPOS"].table
     kern_indices = {
-        index
+        record.Feature.LookupListIndex[0]
         for record in gpos.FeatureList.FeatureRecord
         if record.FeatureTag == "kern"
-        for index in record.Feature.LookupListIndex
     }
     if len(kern_indices) != 1:
-        raise ValueError("Expected exactly one kerning lookup")
+        raise ValueError("Expected one original kerning lookup")
     return gpos.LookupList.Lookup[kern_indices.pop()]
+
+
+def append_kern_pair_lookup(font: TTFont, pairs: dict) -> None:
+    """Apply second-glyph placement separately so adjacent advance pairs overlap."""
+    gpos = font["GPOS"].table
+    lookup = otTables.Lookup()
+    lookup.LookupType = 2
+    lookup.LookupFlag = 0
+    lookup.SubTable = [buildPairPosGlyphsSubtable(pairs, font.getReverseGlyphMap())]
+    lookup.SubTableCount = 1
+    index = len(gpos.LookupList.Lookup)
+    gpos.LookupList.Lookup.append(lookup)
+    gpos.LookupList.LookupCount += 1
+    for record in gpos.FeatureList.FeatureRecord:
+        if record.FeatureTag == "kern":
+            record.Feature.LookupListIndex.append(index)
+            record.Feature.LookupCount += 1
 
 
 def pair_kerning(lookup, left: str, right: str) -> int:
@@ -492,6 +498,7 @@ def add_collision_kerning(font: TTFont, source_dir: Path = DEFAULT_SOURCE_DIR) -
     lookup = kern_lookup(font)
     cmap = font.getBestCmap()
     pairs = {}
+    placements = {}
     italic_f_forms = ("f.simple", "f.italic") if font["OS/2"].fsSelection & 1 else ()
     for pair, target in collision_targets(source_dir).items():
         left, right = (cmap[ord(character)] for character in pair)
@@ -502,16 +509,17 @@ def add_collision_kerning(font: TTFont, source_dir: Path = DEFAULT_SOURCE_DIR) -
         right_forms = (right, *italic_f_forms) if right == "f" else (right,)
         for left_form in left_forms:
             for right_form in right_forms:
+                pairs[(left_form, right_form)] = value
                 placement = ITALIC_F_FOLLOWER_PLACEMENT.get(left_form, {}).get(pair)
                 if placement is not None:
-                    pairs[(left_form, right_form)] = (
-                        value[0],
+                    placements[(left_form, right_form)] = (
+                        None,
                         buildValue({"XPlacement": placement}),
                     )
-                else:
-                    pairs[(left_form, right_form)] = value
     lookup.SubTable.insert(0, buildPairPosGlyphsSubtable(pairs, font.getReverseGlyphMap()))
     lookup.SubTableCount = len(lookup.SubTable)
+    if placements:
+        append_kern_pair_lookup(font, placements)
 
 
 def reduce_spacing(font: TTFont) -> None:
