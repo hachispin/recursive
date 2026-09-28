@@ -10,6 +10,8 @@ from itertools import product
 import json
 import math
 import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 
 from fontTools.otlLib.builder import (
@@ -466,21 +468,22 @@ def pair_kerning(lookup, left: str, right: str) -> int:
 
 @lru_cache(maxsize=None)
 def collision_targets(source_dir: Path) -> dict[str, int]:
-    """Choose the largest safe kerning value across all four source styles."""
+    """Choose the largest safe kerning value across all source styles and weights."""
     all_pairs = set().union(*(set(corrections) for corrections in COLLISION_KERNING.values()))
     targets = {}
     for voice in ("linear", "casual"):
         for italic in (False, True):
             style = "italic" if italic else "upright"
-            source = source_dir / SOURCE_FILES[voice][400][int(italic)]
-            with TTFont(source) as font:
-                lookup = kern_lookup(font)
-                cmap = font.getBestCmap()
-                corrections = COLLISION_KERNING[f"{voice}-{style}"]
-                for pair in all_pairs:
-                    left, right = (cmap[ord(character)] for character in pair)
-                    safe = pair_kerning(lookup, left, right) + corrections.get(pair, 0)
-                    targets[pair] = max(targets.get(pair, safe), safe)
+            corrections = COLLISION_KERNING[f"{voice}-{style}"]
+            for weight in WEIGHTS:
+                source = source_dir / SOURCE_FILES[voice][weight][int(italic)]
+                with TTFont(source) as font:
+                    lookup = kern_lookup(font)
+                    cmap = font.getBestCmap()
+                    for pair in all_pairs:
+                        left, right = (cmap[ord(character)] for character in pair)
+                        safe = pair_kerning(lookup, left, right) + corrections.get(pair, 0)
+                        targets[pair] = max(targets.get(pair, safe), safe)
     return targets
 
 
@@ -537,6 +540,44 @@ def add_narrow_numeric_slash(font: TTFont) -> None:
     font.setGlyphOrder([*font.getGlyphOrder(), "slash.num"])
     font["maxp"].numGlyphs = len(font.getGlyphOrder())
     font["hhea"].recalc(font)
+
+
+def autohint_face(raw_path: Path, hinted_path: Path) -> None:
+    """Replace inherited hints after editing outlines and metrics."""
+    binary = shutil.which("ttfautohint")
+    if binary is None:
+        raise RuntimeError("ttfautohint is required to build the static TTFs")
+    dehinted = raw_path.with_name("dehinted.ttf")
+    clean_path = raw_path.with_name("clean.ttf")
+    subprocess.run([binary, "--dehint", "--no-info", str(raw_path), str(dehinted)], check=True)
+
+    # The mastered inputs contain ttfautohint's unused helper glyph. A second
+    # hinting pass rejects fonts that still contain it, even after --dehint.
+    with TTFont(dehinted, lazy=False) as clean:
+        # Layout tables refer to glyph IDs. Decompile them before removing the
+        # helper so FontTools rewrites those references for the new glyph order.
+        clean.ensureDecompiled()
+        helper = ".ttfautohint"
+        glyf = clean["glyf"]
+        hmtx = clean["hmtx"]
+        if helper in clean.getGlyphOrder():
+            referenced = helper in clean.getBestCmap().values()
+            for name in clean.getGlyphOrder():
+                if name == helper:
+                    continue
+                glyph = glyf[name]
+                if glyph.isComposite() and any(c.glyphName == helper for c in glyph.components):
+                    referenced = True
+                    break
+            if referenced:
+                raise ValueError("ttfautohint helper glyph is referenced")
+            del glyf.glyphs[helper]
+            del hmtx.metrics[helper]
+            clean.setGlyphOrder([name for name in clean.getGlyphOrder() if name != helper])
+            clean["maxp"].numGlyphs = len(clean.getGlyphOrder())
+        clean.save(clean_path)
+
+    subprocess.run([binary, "--composites", str(clean_path), str(hinted_path)], check=True)
 
 
 def set_name(font: TTFont, name_id: int, value: str) -> None:
@@ -655,8 +696,13 @@ def build_face(
     suffix = "Italic" if italic else ""
     filename = f"{FAMILIES[variant].replace(' ', '')}-{WEIGHTS[weight]}{suffix}.ttf"
     ttf_path = output / "ttf" / filename
-    font.save(ttf_path, reorderTables=False)
-    font.close()
+    with tempfile.TemporaryDirectory(prefix="recursive-autohint-", dir=ttf_path.parent) as directory:
+        raw_path = Path(directory) / "raw.ttf"
+        hinted_path = Path(directory) / "hinted.ttf"
+        font.save(raw_path, reorderTables=False)
+        font.close()
+        autohint_face(raw_path, hinted_path)
+        hinted_path.replace(ttf_path)
 
     return ttf_path, source_path
 

@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from fontTools.pens.recordingPen import RecordingPen
 from fontTools.ttLib import TTFont
 
 from build import (
@@ -34,6 +35,12 @@ from build import (
 requires_harfbuzz = unittest.skipUnless(
     shutil.which("hb-shape"), "HarfBuzz hb-shape is required"
 )
+
+
+def outline_commands(font: TTFont, name: str) -> list:
+    pen = RecordingPen()
+    font.getGlyphSet()[name].draw(pen)
+    return pen.value
 
 
 class DuoSansTests(unittest.TestCase):
@@ -103,6 +110,8 @@ class DuoSansTests(unittest.TestCase):
         for path, reference in self.faces:
             with self.subTest(face=path.name), TTFont(path) as font, TTFont(DEFAULT_SOURCE_DIR / reference.name) as source:
                 for name, (advance, left_bearing) in source["hmtx"].metrics.items():
+                    if name == ".ttfautohint":
+                        continue
                     expected = advance - SPACING_REDUCTION if advance else 0
                     if name in ("f", "f.italic") and path.name.endswith("Italic.ttf"):
                         left_bearing = font["glyf"][name].xMin
@@ -319,8 +328,8 @@ class DuoSansTests(unittest.TestCase):
                             1,
                         )
                     self.assertEqual(
-                        font["glyf"]["f.simple"].compile(font["glyf"]),
-                        source["glyf"]["f"].compile(source["glyf"]),
+                        outline_commands(font, "f.simple"),
+                        outline_commands(source, "f"),
                     )
                     self.assertEqual(font["hmtx"]["f"][0], font["hmtx"]["f.simple"][0])
                 finally:
@@ -331,7 +340,10 @@ class DuoSansTests(unittest.TestCase):
         for path, _ in self.faces:
             if not path.name.endswith("Italic.ttf"):
                 continue
-            for pair in ("fi", "fj", "fD", "f,", "qf", "#f", "`f", "ff"):
+            for pair in (
+                "fi", "fj", "fD", "f,", "qf", "#f", "`f", "ff",
+                "Df", "Pf", "rf", "tf", "(f", "f/",
+            ):
                 with self.subTest(face=path.name, pair=pair):
                     widths = [
                         sum(glyph["ax"] for glyph in self.shape(path, pair, features))
@@ -435,16 +447,20 @@ class DuoSansTests(unittest.TestCase):
 
     @requires_harfbuzz
     def test_collision_pairs_share_the_largest_safe_width(self):
-        for pair in ("Q)", "qj", "Lj", "Tx", "YY", "sT", "*q", "fD", "fi", "fj", "f,", "qf", "#f", "`f"):
+        for pair in (
+            "Q)", "qj", "Lj", "Tx", "YY", "sT", "*q", "fD", "fi", "fj", "f,", "qf", "#f", "`f",
+            "Df", "Pf", "rf", "tf", "(f", "f/", "Qf", "_f",
+        ):
             safe_source_widths = []
             for voice in ("linear", "casual"):
                 for italic in (False, True):
                     style = "italic" if italic else "upright"
-                    source = DEFAULT_SOURCE_DIR / SOURCE_FILES[voice][400][int(italic)]
-                    source_width = sum(glyph["ax"] for glyph in self.shape(source, pair))
-                    safe_source_widths.append(
-                        source_width + COLLISION_KERNING[f"{voice}-{style}"].get(pair, 0)
-                    )
+                    for weight in WEIGHTS:
+                        source = DEFAULT_SOURCE_DIR / SOURCE_FILES[voice][weight][int(italic)]
+                        source_width = sum(glyph["ax"] for glyph in self.shape(source, pair))
+                        safe_source_widths.append(
+                            source_width + COLLISION_KERNING[f"{voice}-{style}"].get(pair, 0)
+                        )
             expected = max(safe_source_widths) - SPACING_REDUCTION
             for path, _ in self.faces:
                 with self.subTest(face=path.name, pair=pair):
@@ -471,8 +487,15 @@ class DuoSansTests(unittest.TestCase):
     def test_original_outlines_character_maps_and_other_positioning_are_preserved(self):
         for variant, weight, italic, path, source_path in self.configurations:
             with self.subTest(face=path.name), TTFont(path) as font, TTFont(source_path) as source:
-                self.assertEqual(font.getGlyphOrder(), source.getGlyphOrder())
-                for tag in ("cmap", "glyf", "hmtx", "GDEF"):
+                names = [name for name in font.getGlyphOrder() if name != ".ttfautohint"]
+                self.assertEqual(
+                    names,
+                    [name for name in source.getGlyphOrder() if name != ".ttfautohint"],
+                )
+                for name in names:
+                    self.assertEqual(outline_commands(font, name), outline_commands(source, name), name)
+                    self.assertEqual(font["hmtx"][name], source["hmtx"][name], name)
+                for tag in ("cmap", "GDEF"):
                     # Recompile both sides so cmap subtable packing is normalized.
                     self.assertEqual(font[tag].compile(font), source[tag].compile(source), tag)
                 self.assertEqual(
@@ -486,6 +509,13 @@ class DuoSansTests(unittest.TestCase):
                     for lang in [script.DefaultLangSys] + [r.LangSys for r in script.LangSysRecord]:
                         if lang is not None:
                             self.assertIn("calt", [tags[i] for i in lang.FeatureIndex])
+
+    def test_edited_glyphs_are_autohinted(self):
+        for _, _, italic, path, _ in self.configurations:
+            with self.subTest(face=path.name), TTFont(path) as font:
+                self.assertIn("ttfautohint", font["name"].getDebugName(5))
+                for name in ("slash.num", "f", "f.italic") if italic else ("slash.num",):
+                    self.assertGreater(len(font["glyf"][name].program.getBytecode()), 0, name)
 
 
 if __name__ == "__main__":

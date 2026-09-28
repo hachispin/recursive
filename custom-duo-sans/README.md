@@ -46,12 +46,15 @@ source kerning class. Roman `te` spacing remains unchanged.
 
 Some heavy source masters let adjacent glyphs overlap, especially Casual pairs
 such as `Q)`, `qj`, and `Lj`. The restored long `f` also needs extra room before
-some following glyphs in heavy Linear italics. These builds add measured pair
-kerning to give those combinations a small gap. Glyph outlines stay intact.
+some following glyphs in heavy Linear italics. The default swash italic `f`
+needs room after preceding glyphs such as `D`, `P`, `r`, `t`, and `(`, and before
+the ordinary `/`. These builds add measured pair kerning to give those
+combinations a small gap. Glyph outlines stay intact.
 The adjustments are listed in [`collision_kerning.json`](collision_kerning.json).
-For each listed pair, the build uses the widest measured safe result in every
-family, weight, and slope. This prevents those collision fixes from changing
-line length when switching styles. Other upstream kerning remains as supplied.
+For each listed pair, the build uses the widest measured safe result across the
+source families, weights, and slopes. This prevents those collision fixes from
+changing line length when switching styles. Other upstream kerning remains as
+supplied.
 
 All advancing glyphs are spaced 20 font units closer together than the source
 fonts, including spaces and punctuation. Zero-width marks remain zero-width.
@@ -105,10 +108,13 @@ To select families, use `--variants` with one or more of `duo`, `linear`, and
 python3 custom-duo-sans/build.py --variants duo
 ```
 
-The build needs Python 3 and FontTools. It assembles the 32 mastered Sans static
-fonts tracked in [`sources/ttf`](sources/ttf), so it does not need the older full
-Recursive mastering toolchain or a network download. These upstream inputs are
-kept separately from the custom output fonts. See [source provenance](sources/README.md).
+The build needs Python 3, FontTools, and the `ttfautohint` command. It assembles
+the 32 mastered Sans static fonts tracked in [`sources/ttf`](sources/ttf), so it
+does not need the older full Recursive mastering toolchain or a network download.
+The builder removes the source hint instructions, then runs `ttfautohint` with
+composite hinting after all outline and metric edits. This also hints the custom
+italic `f` and `slash.num` glyphs. The upstream inputs stay untouched. See
+[source provenance](sources/README.md).
 
 To run the font shaping regression checks (requires HarfBuzz's `hb-shape`):
 
