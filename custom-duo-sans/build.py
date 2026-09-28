@@ -38,7 +38,7 @@ FAMILIES = {
     "linear": "Recursive Linear Sans",
     "casual": "Recursive Casual Sans",
 }
-BUILD_VERSION = "1.099"
+BUILD_VERSION = "1.100"
 SPACING_REDUCTION = 20
 SLASH_ADVANCE_REDUCTION = 80
 WEIGHTS = {
@@ -83,11 +83,12 @@ SOURCE_FILES["duo"] = {
 COLLISION_KERNING = json.loads((HERE / "collision_kerning.json").read_text())
 
 
-def add_time_colons(font: TTFont) -> None:
-    """Center colons between lining digits with the default-on calt feature."""
+def add_numeric_punctuation(font: TTFont) -> None:
+    """Select centered colons and narrow slashes between lining digits."""
     cmap = font.getBestCmap()
     colon = cmap[ord(":")]
     ratio = cmap[ord("∶")]
+    slash = cmap[ord("/")]
     digit_names = {cmap[codepoint] for codepoint in range(ord("0"), ord("9") + 1)}
     # Include proportional, slashed/dotted-zero and stylistic digit alternates.
     # Superscripts, subscripts and fraction figures need their own punctuation.
@@ -97,10 +98,12 @@ def add_time_colons(font: TTFont) -> None:
 
     replacement = SingleSubstBuilder(font, None)
     replacement.mapping[colon] = ratio
+    replacement.mapping[slash] = "slash.num"
     replacement.lookup_index = len(lookups)
     context = ChainContextSubstBuilder(font, None)
     # Equivalent feature syntax: sub @digits colon' @digits by uni2236;
     context.rules.append(ChainContextualRule([digits], [{colon}], [digits], [replacement]))
+    context.rules.append(ChainContextualRule([digits], [{slash}], [digits], [replacement]))
     context_index = len(lookups) + 1
     lookups.extend([replacement.build(), context.build()])
     gsub.LookupList.LookupCount = len(lookups)
@@ -451,33 +454,21 @@ def reduce_spacing(font: TTFont) -> None:
     font["hhea"].recalc(font)
 
 
-def narrow_slash(font: TTFont) -> None:
-    """Tighten the slash while retaining its original stroke and code ligatures."""
+def add_narrow_numeric_slash(font: TTFont) -> None:
+    """Add a narrow alternate without changing ordinary slash spacing."""
     glyf = font["glyf"]
     metrics = font["hmtx"].metrics
-    slash = glyf["slash"]
+    slash = deepcopy(glyf["slash"])
     shift = SLASH_ADVANCE_REDUCTION // 2
     for index, (x, y) in enumerate(slash.coordinates):
         slash.coordinates[index] = (x - shift, y)
     slash.recalcBounds(glyf)
     width, _ = metrics["slash"]
-    metrics["slash"] = (width - SLASH_ADVANCE_REDUCTION, slash.xMin)
-
-    # These are alternate presentations of the same punctuation mark.
-    for name in ("slash.case", "uni2215"):
-        glyph = glyf[name]
-        glyph.recalcBounds(glyf)
-        width, _ = metrics[name]
-        metrics[name] = (width - SLASH_ADVANCE_REDUCTION, glyph.xMin)
-
-    # Opt-in code ligatures have their own spacing and should retain their
-    # original outlines after the shared slash component moves.
-    for name in ("astr_slash.code", "slash_astr.code", "slash_slash.code", "slash_slash_slash.code"):
-        glyph = glyf[name]
-        for component in glyph.components:
-            if component.glyphName == "slash":
-                component.x += shift
-        glyph.recalcBounds(glyf)
+    glyf.glyphs["slash.num"] = slash
+    metrics["slash.num"] = (width - SLASH_ADVANCE_REDUCTION, slash.xMin)
+    font.setGlyphOrder([*font.getGlyphOrder(), "slash.num"])
+    font["maxp"].numGlyphs = len(font.getGlyphOrder())
+    font["hhea"].recalc(font)
 
 
 def set_name(font: TTFont, name_id: int, value: str) -> None:
@@ -590,8 +581,8 @@ def build_face(
         add_italic_te_kerning(font)
     add_collision_kerning(font, source_dir)
     reduce_spacing(font)
-    narrow_slash(font)
-    add_time_colons(font)
+    add_narrow_numeric_slash(font)
+    add_numeric_punctuation(font)
     update_metadata(font, weight, italic, variant)
     suffix = "Italic" if italic else ""
     filename = f"{FAMILIES[variant].replace(' ', '')}-{WEIGHTS[weight]}{suffix}.ttf"

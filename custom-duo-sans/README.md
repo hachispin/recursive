@@ -54,10 +54,10 @@ All advancing glyphs are spaced 20 font units closer together than the source
 fonts, including spaces and punctuation. Zero-width marks remain zero-width.
 The collision exceptions account for this tighter spacing.
 
-The `/` glyph and its case and division-slash forms are a further 80 units
-narrower, with their original strokes centered in the new advance. This keeps
-numeric text such as `1/2` closer together. Opt-in code ligatures retain their
-original shapes and spacing.
+The ordinary `/` keeps the source's spacing reduction (580 units). Between
+digits, default-on `calt` substitutes a 500-unit `slash.num` alternate with the
+same stroke centered in its narrower advance. Numeric text such as `1/2` stays
+compact, while text such as `/g` keeps the ordinary slash spacing.
 
 Colons between digits are vertically centered automatically: `12:34`, `9:05`,
 `12:34:56`, and numeric ratios such as `3:2`. The build includes a `calt`

@@ -15,7 +15,6 @@ from build import (
     COLLISION_KERNING,
     FAMILIES,
     SOURCE_FILES,
-    SLASH_ADVANCE_REDUCTION,
     SPACING_REDUCTION,
     WEIGHTS,
     add_collision_kerning,
@@ -24,7 +23,7 @@ from build import (
     collision_targets,
     configure_italic_f_outlines,
     kern_lookup,
-    narrow_slash,
+    add_narrow_numeric_slash,
     pair_kerning,
     plain_f_bar_center,
     reduce_spacing,
@@ -64,7 +63,7 @@ class DuoSansTests(unittest.TestCase):
                                 add_italic_te_kerning(font)
                             add_collision_kerning(font)
                             reduce_spacing(font)
-                            narrow_slash(font)
+                            add_narrow_numeric_slash(font)
                             font.save(reference)
                         if italic:
                             plain_reference = output / "plain-reference" / source.name
@@ -72,7 +71,7 @@ class DuoSansTests(unittest.TestCase):
                                 add_italic_te_kerning(plain_font)
                                 add_collision_kerning(plain_font)
                                 reduce_spacing(plain_font)
-                                narrow_slash(plain_font)
+                                add_narrow_numeric_slash(plain_font)
                                 plain_font.save(plain_reference)
                             cls.plain_references[source.name] = plain_reference
                         references[source] = reference
@@ -105,9 +104,6 @@ class DuoSansTests(unittest.TestCase):
             with self.subTest(face=path.name), TTFont(path) as font, TTFont(DEFAULT_SOURCE_DIR / reference.name) as source:
                 for name, (advance, left_bearing) in source["hmtx"].metrics.items():
                     expected = advance - SPACING_REDUCTION if advance else 0
-                    if name in ("slash", "slash.case", "uni2215"):
-                        expected -= SLASH_ADVANCE_REDUCTION
-                        left_bearing -= SLASH_ADVANCE_REDUCTION // 2
                     if name in ("f", "f.italic") and path.name.endswith("Italic.ttf"):
                         left_bearing = font["glyf"][name].xMin
                     self.assertEqual(font["hmtx"][name], (expected, left_bearing))
@@ -137,17 +133,24 @@ class DuoSansTests(unittest.TestCase):
                     )
 
     @requires_harfbuzz
-    def test_slash_is_narrower_between_digits(self):
-        for path, _ in self.faces:
+    def test_slash_is_narrower_only_between_digits(self):
+        for path, reference in self.faces:
             with self.subTest(face=path.name), TTFont(path) as font:
                 cmap = font.getBestCmap()
                 slash = cmap[ord("/")]
                 digit = cmap[ord("1")]
-                self.assertEqual(font["hmtx"][slash][0], 500)
+                self.assertEqual(font["hmtx"][slash][0], 580)
+                self.assertEqual(font["hmtx"]["slash.num"][0], 500)
                 self.assertEqual(font["hmtx"][digit][0], 580)
+                for text, expected in (("1/2", 1660), ("12/34", 2820)):
+                    shaped = self.shape(path, text)
+                    self.assertIn("slash.num", [glyph["g"] for glyph in shaped])
+                    self.assertEqual(sum(glyph["ax"] for glyph in shaped), expected)
+                for text in ("/g", "a/b", "1/g", "a/2", "1/", "/2"):
+                    self.assertEqual(self.shape(path, text), self.shape(reference, text))
                 self.assertEqual(
-                    sum(glyph["ax"] for glyph in self.shape(path, "1/2")),
-                    1660,
+                    sum(glyph["ax"] for glyph in self.shape(path, "1/2", "calt=0")),
+                    1740,
                 )
 
     def test_cli_builds_selected_families(self):
