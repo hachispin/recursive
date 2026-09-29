@@ -2,6 +2,7 @@
 
 import json
 import shutil
+import string
 import subprocess
 import sys
 import tempfile
@@ -15,6 +16,7 @@ from build import (
     DEFAULT_SOURCE_DIR,
     COLLISION_KERNING,
     FAMILIES,
+    NORMALIZE_KERNING_PAIRS,
     SOURCE_FILES,
     SPACING_REDUCTION,
     WEIGHTS,
@@ -90,7 +92,7 @@ class DuoSansTests(unittest.TestCase):
         voices = {"duo": ("Lnr", "Csl"), "linear": ("Lnr", "Lnr"), "casual": ("Csl", "Csl")}
         postscript_names = set()
         unique_ids = set()
-        self.assertEqual(len(self.faces), 48)
+        self.assertEqual(len(self.faces), 36)
         for variant, weight, italic, path, source_path in self.configurations:
             with self.subTest(face=path.name), TTFont(path) as font, TTFont(source_path) as source:
                 self.assertTrue(source_path.name.startswith(f"RecursiveSans{voices[variant][italic]}St-"))
@@ -103,8 +105,8 @@ class DuoSansTests(unittest.TestCase):
                 self.assertEqual(font["name"].getDebugName(21), family)
                 postscript_names.add(font["name"].getDebugName(6))
                 unique_ids.add(font["name"].getDebugName(3))
-        self.assertEqual(len(postscript_names), 48)
-        self.assertEqual(len(unique_ids), 48)
+        self.assertEqual(len(postscript_names), 36)
+        self.assertEqual(len(unique_ids), 36)
 
     def test_spacing_reduction_preserves_zero_width_marks(self):
         for path, reference in self.faces:
@@ -152,9 +154,35 @@ class DuoSansTests(unittest.TestCase):
                     left, right = (cmap[ord(character)] for character in pair)
                     self.assertEqual(
                         pair_kerning(lookup, left, right),
-                        target + SPACING_REDUCTION,
+                        target,
                         pair,
                     )
+
+    def test_unlisted_ascii_pairs_keep_upstream_kerning(self):
+        targets = collision_targets(DEFAULT_SOURCE_DIR)
+        for path, reference in self.faces:
+            with self.subTest(face=path.name), TTFont(path) as font, TTFont(DEFAULT_SOURCE_DIR / reference.name) as source:
+                built_lookup = kern_lookup(font)
+                source_lookup = kern_lookup(source)
+                built_cmap = font.getBestCmap()
+                source_cmap = source.getBestCmap()
+                for left in string.printable[:95]:
+                    for right in string.printable[:95]:
+                        pair = left + right
+                        if pair in targets:
+                            continue
+                        self.assertEqual(
+                            pair_kerning(built_lookup, built_cmap[ord(left)], built_cmap[ord(right)]),
+                            pair_kerning(source_lookup, source_cmap[ord(left)], source_cmap[ord(right)]),
+                            pair,
+                        )
+
+    def test_upstream_style_differences_are_normalized(self):
+        targets = collision_targets(DEFAULT_SOURCE_DIR)
+        for pair in NORMALIZE_KERNING_PAIRS:
+            self.assertIn(pair, targets)
+        for pair in ("ri", "ra", "re", "rv", "Lj"):
+            self.assertNotIn(pair, targets)
 
     @requires_harfbuzz
     def test_slash_is_narrower_only_between_digits(self):
@@ -454,7 +482,7 @@ class DuoSansTests(unittest.TestCase):
             upstream = DEFAULT_SOURCE_DIR / source.name
             self.assertEqual(
                 sum(glyph["ax"] for glyph in self.shape(path, "fi")),
-                sum(glyph["ax"] for glyph in self.shape(upstream, "fi")) - 30,
+                sum(glyph["ax"] for glyph in self.shape(upstream, "fi")) - 2 * SPACING_REDUCTION,
             )
             for features in ("", "ss03=1", "ss14=1", "liga=1", "dlig=1", "ss13=1"):
                 with self.subTest(face=path.name, features=features):
@@ -464,7 +492,7 @@ class DuoSansTests(unittest.TestCase):
     def test_collision_pairs_share_the_largest_safe_width(self):
         for pair in (
             "Q)", "qj", "Lj", "Tx", "YY", "sT", "*q", "fD", "fi", "fj", "f,", "qf", "#f", "`f",
-            "Df", "Pf", "rf", "tf", "(f", "f/", "Qf", "_f",
+            "Df", "Pf", "rf", "ri", "tf", "(f", "f/", "Qf", "_f",
         ):
             safe_source_widths = []
             for voice in ("linear", "casual"):
@@ -476,12 +504,41 @@ class DuoSansTests(unittest.TestCase):
                         safe_source_widths.append(
                             source_width + COLLISION_KERNING[f"{voice}-{style}"].get(pair, 0)
                         )
-            expected = max(safe_source_widths) - SPACING_REDUCTION
+            expected = max(safe_source_widths) - 2 * SPACING_REDUCTION
             for path, _ in self.faces:
                 with self.subTest(face=path.name, pair=pair):
                     self.assertEqual(
                         sum(glyph["ax"] for glyph in self.shape(path, pair)),
                         expected,
+                    )
+
+    @requires_harfbuzz
+    def test_every_corrected_pair_shapes_to_one_shared_width(self):
+        targets = collision_targets(DEFAULT_SOURCE_DIR)
+        expected_widths = {}
+        for path, _ in self.faces:
+            with TTFont(path) as font:
+                cmap = font.getBestCmap()
+                for pair, target in targets.items():
+                    with self.subTest(face=path.name, pair=pair):
+                        width = sum(font["hmtx"][cmap[ord(c)]][0] for c in pair) + target
+                        shaped = self.shape(path, pair, "liga=0")
+                        self.assertEqual(len(shaped), 2)
+                        self.assertEqual(sum(glyph["ax"] for glyph in shaped), width)
+                        expected_widths.setdefault(pair, width)
+                        self.assertEqual(width, expected_widths[pair])
+
+    @requires_harfbuzz
+    def test_restored_pairs_shape_with_upstream_kerning(self):
+        for path, reference in self.faces:
+            source = DEFAULT_SOURCE_DIR / reference.name
+            for pair in ("ri", "ra", "re", "rv", "Lj"):
+                with self.subTest(face=path.name, pair=pair):
+                    upstream = self.shape(source, pair, "liga=0")
+                    built = self.shape(path, pair, "liga=0")
+                    self.assertEqual(
+                        [glyph["ax"] for glyph in built],
+                        [glyph["ax"] - SPACING_REDUCTION for glyph in upstream],
                     )
 
     @requires_harfbuzz
@@ -491,7 +548,7 @@ class DuoSansTests(unittest.TestCase):
         for path, _ in self.faces:
             features_list = ("", "ss03=1", "ss14=1") if path.name.endswith("Italic.ttf") else ("",)
             for features in features_list:
-                for text in ("arf", "afi", "rfi", "fDf", "tef"):
+                for text in ("arf", "ari", "afi", "rfi", "fDf", "tef"):
                     with self.subTest(face=path.name, features=features, text=text):
                         left = self.shape(path, text[:2], features)
                         right = self.shape(path, text[1:], features)

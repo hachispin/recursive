@@ -6,7 +6,7 @@ Install the fonts in [`ttf/`](ttf). This directory contains the custom builds:
 - **Recursive Linear Sans**: Linear roman and italic.
 - **Recursive Casual Sans**: Casual roman and italic.
 
-Each family has eight weights, each with roman and italic faces: 48 TTFs total.
+Each family has six weights, Light through ExtraBold, each with roman and italic faces: 36 TTFs total.
 All include the custom time-colon behavior and italic feature settings described
 in the [build notes](../custom-duo-sans/README.md).
 

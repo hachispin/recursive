@@ -44,17 +44,16 @@ the pair look tighter without changing its total advance width. The exception
 includes accented `t` forms but excludes the unrelated `pi` glyph from the
 source kerning class. Roman `te` spacing remains unchanged.
 
-Some heavy source masters let adjacent glyphs overlap, especially Casual pairs
-such as `Q)`, `qj`, and `Lj`. The restored long `f` also needs extra room before
-some following glyphs in heavy Linear italics. The default swash italic `f`
-needs room after preceding glyphs such as `D`, `P`, `r`, `t`, and `(`, and before
-the ordinary `/`. These builds add measured pair kerning to give those
-combinations a small gap. Glyph outlines stay intact.
-The adjustments are listed in [`collision_kerning.json`](collision_kerning.json).
-For each listed pair, the build uses the widest measured safe result across the
-source families, weights, and slopes. This prevents those collision fixes from
-changing line length when switching styles. Other upstream kerning remains as
-supplied.
+The 20-unit spacing reduction can make some ASCII pairs collide. The builds
+retain upstream GPOS kerning except where the final outlines need more room.
+A few pairs previously corrected for collisions still need a shared width
+because their upstream kerning differs by slope. Measured corrections for a
+10-unit horizontal ink gap are in [`collision_kerning.json`](collision_kerning.json).
+The build uses one safe pair width across the retained families, weights, and
+slopes. Glyph outlines stay intact. Recompute the corrections after changing
+outlines or weights with `python3 custom-duo-sans/measure_collision_kerning.py`
+(requires Pillow and NumPy), then rebuild and run the measurement with
+`--verify` to check the final faces.
 
 All advancing glyphs are spaced 20 font units closer together than the source
 fonts, including spaces and punctuation. Zero-width marks remain zero-width.
@@ -90,8 +89,8 @@ From the repository root:
 python3 custom-duo-sans/build.py
 ```
 
-The default build creates all three families, each with eight weights from Light
-(300) through ExtraBlack (1000), with a roman and italic at each weight: 48 TTFs
+The default build creates all three families, each with six weights from Light
+(300) through ExtraBold (800), with a roman and italic at each weight: 36 TTFs
 in total. Install the desktop fonts from [`fonts/ttf`](../fonts/ttf); filenames
 start with `RecursiveDuoSans`, `RecursiveLinearSans`, or `RecursiveCasualSans`.
 

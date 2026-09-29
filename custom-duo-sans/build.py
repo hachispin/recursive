@@ -50,8 +50,6 @@ WEIGHTS = {
     600: "SemiBold",
     700: "Bold",
     800: "ExtraBold",
-    900: "Black",
-    1000: "ExtraBlack",
 }
 SOURCE_FILES = {
     "linear": {
@@ -61,8 +59,6 @@ SOURCE_FILES = {
         600: ("RecursiveSansLnrSt-SemiBold.ttf", "RecursiveSansLnrSt-SmBdItalic.ttf"),
         700: ("RecursiveSansLnrSt-Bold.ttf", "RecursiveSansLnrSt-BoldItalic.ttf"),
         800: ("RecursiveSansLnrSt-ExtraBold.ttf", "RecursiveSansLnrSt-ExBdItalic.ttf"),
-        900: ("RecursiveSansLnrSt-Black.ttf", "RecursiveSansLnrSt-BlackItalic.ttf"),
-        1000: ("RecursiveSansLnrSt-XBlk.ttf", "RecursiveSansLnrSt-XBlkItalic.ttf"),
     },
     "casual": {
         300: ("RecursiveSansCslSt-Light.ttf", "RecursiveSansCslSt-LtItalic.ttf"),
@@ -71,8 +67,6 @@ SOURCE_FILES = {
         600: ("RecursiveSansCslSt-SemiBd.ttf", "RecursiveSansCslSt-SmBdItalic.ttf"),
         700: ("RecursiveSansCslSt-Bold.ttf", "RecursiveSansCslSt-BdItalic.ttf"),
         800: ("RecursiveSansCslSt-ExtraBd.ttf", "RecursiveSansCslSt-XBdItalic.ttf"),
-        900: ("RecursiveSansCslSt-Black.ttf", "RecursiveSansCslSt-BlkItalic.ttf"),
-        1000: ("RecursiveSansCslSt-XBlk.ttf", "RecursiveSansCslSt-XBlkItalic.ttf"),
     },
 }
 SOURCE_FILES["duo"] = {
@@ -80,9 +74,17 @@ SOURCE_FILES["duo"] = {
     for weight in WEIGHTS
 }
 
-# Measured ASCII collisions in the upstream heavy masters. The largest safe
-# resulting pair width is shared by every genre, slope, and weight.
+# Corrections measured with the final outlines and upstream kerning after the
+# 20-unit spacing reduction, across the six output weights. Unlisted pairs keep
+# their upstream GPOS values.
 COLLISION_KERNING = json.loads((HERE / "collision_kerning.json").read_text())
+
+# These pairs were formerly collision overrides, but their upstream kerning
+# differs by slope. Keep one pair width in all output faces even without a
+# remaining collision. The italic f followers also need their own placement.
+NORMALIZE_KERNING_PAIRS = (
+    "*q", "Tq", "`q", "aI", "aJ", "aj", "dr", "i+", "iY", "i\\", "ij", "iy",
+)
 
 
 def add_numeric_punctuation(font: TTFont) -> None:
@@ -146,7 +148,7 @@ ARCHIVED_F_LOCATIONS = (250, 800, 900)
 # User-facing weights mapped to the source designspace's interpolation values.
 ARCHIVED_F_WEIGHT_MAP = {
     300: 250, 400: 450, 500: 533, 600: 616,
-    700: 700, 800: 800, 900: 850, 1000: 900,
+    700: 700, 800: 800,
 }
 # The source swash f ends its upper stroke in a tight curl. Use a plain,
 # angled terminal based on the original italic f instead. Each tuple holds
@@ -474,8 +476,10 @@ def pair_kerning(lookup, left: str, right: str) -> int:
 
 @lru_cache(maxsize=None)
 def collision_targets(source_dir: Path) -> dict[str, int]:
-    """Choose the largest safe kerning value across all source styles and weights."""
-    all_pairs = set().union(*(set(corrections) for corrections in COLLISION_KERNING.values()))
+    """Choose shared kerning only for collisions, slope differences, and f forms."""
+    all_pairs = set(NORMALIZE_KERNING_PAIRS)
+    all_pairs.update(pair for forms in ITALIC_F_FOLLOWER_PLACEMENT.values() for pair in forms)
+    all_pairs.update(*(set(corrections) for corrections in COLLISION_KERNING.values()))
     targets = {}
     for voice in ("linear", "casual"):
         for italic in (False, True):
@@ -502,8 +506,8 @@ def add_collision_kerning(font: TTFont, source_dir: Path = DEFAULT_SOURCE_DIR) -
     italic_f_forms = ("f.simple", "f.italic") if font["OS/2"].fsSelection & 1 else ()
     for pair, target in collision_targets(source_dir).items():
         left, right = (cmap[ord(character)] for character in pair)
-        # The reduced glyph advance would remove part of this safety gap.
-        value = (buildValue({"XAdvance": target + SPACING_REDUCTION}), None)
+        # Corrections are measured after reducing the glyph advances.
+        value = (buildValue({"XAdvance": target}), None)
         # The italic alternates share the default f's pair advance.
         left_forms = (left, *italic_f_forms) if left == "f" else (left,)
         right_forms = (right, *italic_f_forms) if right == "f" else (right,)
@@ -790,6 +794,14 @@ def main() -> None:
 
     output = args.output.resolve()
     (output / "ttf").mkdir(parents=True, exist_ok=True)
+
+    # Remove faces from the former eight-weight release on repeat builds.
+    for variant in FAMILIES:
+        for former_weight in ("Black", "ExtraBlack"):
+            for suffix in ("", "Italic"):
+                (output / "ttf" / f"{FAMILIES[variant].replace(' ', '')}-{former_weight}{suffix}.ttf").unlink(
+                    missing_ok=True
+                )
 
     built = []
     for variant in args.variants:
