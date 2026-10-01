@@ -512,10 +512,11 @@ def pair_kerning(lookup, left: str, right: str) -> int:
 
 @lru_cache(maxsize=None)
 def collision_targets(source_dir: Path) -> dict[str, int]:
-    """Choose shared kerning only for collisions, slope differences, and f forms."""
+    """Choose shared kerning for collisions, slope differences, and slash runs."""
     all_pairs = set(NORMALIZE_KERNING_PAIRS)
     all_pairs.update(pair for forms in ITALIC_F_FOLLOWER_PLACEMENT.values() for pair in forms)
     all_pairs.update(*(set(corrections) for corrections in COLLISION_KERNING.values()))
+    all_pairs.add("//")
     targets = {}
     for voice in ("linear", "casual"):
         for italic in (False, True):
@@ -530,6 +531,9 @@ def collision_targets(source_dir: Path) -> dict[str, int]:
                         left, right = (cmap[ord(character)] for character in pair)
                         safe = pair_kerning(lookup, left, right) + corrections.get(pair, 0)
                         targets[pair] = max(targets.get(pair, safe), safe)
+    # Both slash glyphs have the same advance. Match repeated backslashes to
+    # the upstream forward-slash pair without changing either glyph's width.
+    targets["\\\\"] = targets["//"]
     return targets
 
 

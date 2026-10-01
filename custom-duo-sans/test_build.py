@@ -184,6 +184,7 @@ class DuoSansTests(unittest.TestCase):
         targets = collision_targets(DEFAULT_SOURCE_DIR)
         for pair in NORMALIZE_KERNING_PAIRS:
             self.assertIn(pair, targets)
+        self.assertEqual(targets["\\\\"], targets["//"])
         for pair in ("ri", "ra", "re", "rv", "Lj"):
             self.assertNotIn(pair, targets)
 
@@ -207,6 +208,16 @@ class DuoSansTests(unittest.TestCase):
                     sum(glyph["ax"] for glyph in self.shape(path, "1/2", "calt=0")),
                     1740,
                 )
+
+    @requires_harfbuzz
+    def test_repeated_slashes_and_backslashes_have_matching_spacing(self):
+        expected = 3 * 580 + 2 * collision_targets(DEFAULT_SOURCE_DIR)["//"]
+        for path, _ in self.faces:
+            with self.subTest(face=path.name):
+                for text in ("///", "\\\\\\"):
+                    shaped = self.shape(path, text)
+                    self.assertEqual(len(shaped), 3)
+                    self.assertEqual(sum(glyph["ax"] for glyph in shaped), expected)
 
     def test_cli_builds_selected_families(self):
         with tempfile.TemporaryDirectory(prefix="recursive-family-selection-") as directory:
