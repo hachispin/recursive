@@ -43,6 +43,10 @@ FAMILIES = {
 BUILD_VERSION = "1.101"
 SPACING_REDUCTION = 20
 SLASH_ADVANCE_REDUCTION = 80
+SLASH_GLYPHS = ("slash", "backslash")
+# These zero-upstream pairs already had collision kerning before narrowing.
+# Preserve their established advances alongside the upstream kerned pairs.
+PRESERVED_SLASH_COLLISION_PAIRS = ("(/", "/)", "f\\")
 WEIGHTS = {
     300: "Light",
     400: "Regular",
@@ -88,11 +92,10 @@ NORMALIZE_KERNING_PAIRS = (
 
 
 def add_numeric_punctuation(font: TTFont) -> None:
-    """Select centered colons and narrow slashes between lining digits."""
+    """Select centered colons between lining digits."""
     cmap = font.getBestCmap()
     colon = cmap[ord(":")]
     ratio = cmap[ord("∶")]
-    slash = cmap[ord("/")]
     digit_names = {cmap[codepoint] for codepoint in range(ord("0"), ord("9") + 1)}
     # Include proportional, slashed/dotted-zero and stylistic digit alternates.
     # Superscripts, subscripts and fraction figures need their own punctuation.
@@ -102,12 +105,10 @@ def add_numeric_punctuation(font: TTFont) -> None:
 
     replacement = SingleSubstBuilder(font, None)
     replacement.mapping[colon] = ratio
-    replacement.mapping[slash] = "slash.num"
     replacement.lookup_index = len(lookups)
     context = ChainContextSubstBuilder(font, None)
     # Equivalent feature syntax: sub @digits colon' @digits by uni2236;
     context.rules.append(ChainContextualRule([digits], [{colon}], [digits], [replacement]))
-    context.rules.append(ChainContextualRule([digits], [{slash}], [digits], [replacement]))
     context_index = len(lookups) + 1
     lookups.extend([replacement.build(), context.build()])
     gsub.LookupList.LookupCount = len(lookups)
@@ -594,6 +595,55 @@ def add_narrow_numeric_slash(font: TTFont) -> None:
     font["hhea"].recalc(font)
 
 
+@lru_cache(maxsize=None)
+def preserved_slash_pairs(source_dir: Path) -> frozenset[tuple[str, str]]:
+    """Keep the same compensated pairs in every face, including zero-kern styles."""
+    pairs = set()
+    for voice in ("linear", "casual"):
+        for weight in WEIGHTS:
+            for filename in SOURCE_FILES[voice][weight]:
+                with TTFont(source_dir / filename) as font:
+                    cmap = font.getBestCmap()
+                    for pair in PRESERVED_SLASH_COLLISION_PAIRS:
+                        left, right = (cmap[ord(char)] for char in pair)
+                        pairs.add((left, right))
+                        if left == "f":
+                            pairs.update((name, right) for name in ("f.simple", "f.italic"))
+                    lookup = kern_lookup(font)
+                    for slash in SLASH_GLYPHS:
+                        for other in font.getGlyphOrder():
+                            if other in SLASH_GLYPHS:
+                                continue
+                            for pair in ((slash, other), (other, slash)):
+                                if pair_kerning(lookup, *pair):
+                                    pairs.add(pair)
+    return frozenset(pairs)
+
+
+def narrow_slashes(font: TTFont, source_dir: Path = DEFAULT_SOURCE_DIR) -> None:
+    """Center 500-unit slashes and preserve advances of existing kerned pairs."""
+    lookup = kern_lookup(font)
+    glyphs = font.getReverseGlyphMap()
+    pairs = {
+        pair: (buildValue({"XAdvance": pair_kerning(lookup, *pair) + SLASH_ADVANCE_REDUCTION}), None)
+        for pair in sorted(preserved_slash_pairs(source_dir))
+        if all(name in glyphs for name in pair)
+    }
+    lookup.SubTable.insert(0, buildPairPosGlyphsSubtable(pairs, glyphs))
+    lookup.SubTableCount = len(lookup.SubTable)
+    glyf = font["glyf"]
+    metrics = font["hmtx"].metrics
+    shift = SLASH_ADVANCE_REDUCTION // 2
+    for name in SLASH_GLYPHS:
+        glyph = glyf[name]
+        for index, (x, y) in enumerate(glyph.coordinates):
+            glyph.coordinates[index] = (x - shift, y)
+        glyph.recalcBounds(glyf)
+        width, _ = metrics[name]
+        metrics[name] = (width - SLASH_ADVANCE_REDUCTION, glyph.xMin)
+    font["hhea"].recalc(font)
+
+
 def autohint_face(raw_path: Path, hinted_path: Path) -> None:
     """Replace inherited hints after editing outlines and metrics."""
     binary = shutil.which("ttfautohint")
@@ -744,6 +794,7 @@ def build_face(
     add_collision_kerning(font, source_dir)
     reduce_spacing(font)
     add_narrow_numeric_slash(font)
+    narrow_slashes(font, source_dir)
     add_numeric_punctuation(font)
     update_metadata(font, weight, italic, variant)
     suffix = "Italic" if italic else ""

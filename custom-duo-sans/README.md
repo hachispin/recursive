@@ -59,14 +59,20 @@ outlines or weights with `python3 custom-duo-sans/measure_collision_kerning.py`
 (requires Pillow and NumPy), then rebuild and run the measurement with
 `--verify` to check the final faces.
 
-All advancing glyphs are spaced 20 font units closer together than the source
-fonts, including spaces and punctuation. Zero-width marks remain zero-width.
-The collision exceptions account for this tighter spacing.
+Advancing glyphs are spaced 20 font units closer together than the source
+fonts, including spaces and punctuation. The slashes have an additional
+80-unit reduction. Zero-width marks remain zero-width. The collision
+exceptions account for this tighter spacing.
 
-The ordinary `/` keeps the source's spacing reduction (580 units). Between
-digits, default-on `calt` substitutes a 500-unit `slash.num` alternate with the
-same stroke centered in its narrower advance. Numeric text such as `1/2` stays
-compact, while text such as `/g` keeps the ordinary slash spacing.
+Both `/` and `\` have a 500-unit advance, with their existing strokes centered
+in the narrower width. Numeric slashes have no `calt` substitution. Existing
+kerned pairs with one slash receive 80 units of kerning compensation so their
+total pair advance stays the same, including accented letters and italic
+`f` alternates. The same pairs are compensated in every face, preserving
+upstream style differences. Repeated slashes keep matching kerning in both
+directions and become narrower along with the glyphs.
+Compensation applies per pair: with two compensated pairs around one slash,
+such as `a/b`, the full string's advance increases by 80 units.
 
 Colons between digits are vertically centered automatically: `12:34`, `9:05`,
 `12:34:56`, and numeric ratios such as `3:2`. The build includes a `calt`

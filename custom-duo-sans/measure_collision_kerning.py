@@ -3,6 +3,8 @@
 
 Run after building the current faces. The generated fonts provide the final
 outlines, including the custom italic f; source fonts provide upstream kerning.
+Compensated slash pairs are measured at their original width; other slash
+pairs are measured at the narrowed width so new clearance corrections apply.
 Pillow and NumPy are only needed for this measurement, not for normal builds.
 """
 
@@ -23,10 +25,13 @@ from build import (
     FAMILIES,
     ITALIC_F_FOLLOWER_PLACEMENT,
     SOURCE_FILES,
+    SLASH_ADVANCE_REDUCTION,
+    SLASH_GLYPHS,
     SPACING_REDUCTION,
     WEIGHTS,
     kern_lookup,
     pair_kerning,
+    preserved_slash_pairs,
 )
 
 
@@ -66,6 +71,15 @@ def minimum_gap(left, right, origin: int) -> int:
     return int(np.min(origin + right_start[valid] - left_end[valid] - 1))
 
 
+def before_slash_narrowing(ink, glyph_name):
+    """Restore the original slash origin for pairs whose advance is preserved."""
+    if glyph_name not in SLASH_GLYPHS:
+        return ink
+    y, left, right = ink
+    shift = SLASH_ADVANCE_REDUCTION // 2
+    return y, left + shift, right + shift
+
+
 def remap_f(font_path: Path, glyph_name: str, output: Path) -> Path:
     """Make an alternate f addressable through cmap for outline measurement."""
     with TTFont(font_path) as font:
@@ -80,6 +94,7 @@ def measure(source_dir: Path, font_dir: Path, margin: int, verify: bool = False)
     corrections = {f"{voice}-{slope}": {} for voice in ("linear", "casual")
                    for slope in ("upright", "italic")}
     failures = []
+    preserved = preserved_slash_pairs(source_dir)
     characters = tuple(ASCII)
     with tempfile.TemporaryDirectory(prefix="recursive-kerning-measure-") as directory:
         temporary = Path(directory)
@@ -115,6 +130,7 @@ def measure(source_dir: Path, font_dir: Path, margin: int, verify: bool = False)
                                 source_kern = pair_kerning(
                                     lookup, source_cmap[ord(left)], source_cmap[ord(right)]
                                 )
+                                preserve_advance = (built_cmap[ord(left)], built_cmap[ord(right)]) in preserved
                                 right_forms = ("f", "f.italic", "f.simple") if italic and right == "f" else (right,)
                                 needed = 0
                                 for left_form in left_forms:
@@ -124,9 +140,17 @@ def measure(source_dir: Path, font_dir: Path, margin: int, verify: bool = False)
                                         placement -= SPACING_REDUCTION
                                     for right_form in right_forms:
                                         right_ink = alternate_masks.get(right_form, masks[right])
+                                        measured_left = left_ink
+                                        measured_right = right_ink
+                                        measured_advance = base_advance
+                                        if preserve_advance:
+                                            measured_left = before_slash_narrowing(left_ink, built_cmap[ord(left)])
+                                            measured_right = before_slash_narrowing(right_ink, built_cmap[ord(right)])
+                                            if built_cmap[ord(left)] in SLASH_GLYPHS:
+                                                measured_advance += SLASH_ADVANCE_REDUCTION
                                         gap = minimum_gap(
-                                            left_ink, right_ink,
-                                            base_advance + source_kern + placement,
+                                            measured_left, measured_right,
+                                            measured_advance + source_kern + placement,
                                         )
                                         needed = max(needed, margin - gap)
                                         if verify:

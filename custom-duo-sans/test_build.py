@@ -18,6 +18,8 @@ from build import (
     FAMILIES,
     NORMALIZE_KERNING_PAIRS,
     SOURCE_FILES,
+    SLASH_ADVANCE_REDUCTION,
+    SLASH_GLYPHS,
     SPACING_REDUCTION,
     WEIGHTS,
     add_collision_kerning,
@@ -27,9 +29,11 @@ from build import (
     collision_targets,
     configure_italic_f_outlines,
     kern_lookup,
+    narrow_slashes,
     add_narrow_numeric_slash,
     pair_kerning,
     plain_f_bar_center,
+    preserved_slash_pairs,
     reduce_spacing,
     validate_face,
 )
@@ -55,10 +59,12 @@ class DuoSansTests(unittest.TestCase):
         (output / "ttf").mkdir()
         (output / "reference").mkdir()
         (output / "plain-reference").mkdir()
+        (output / "wide-reference").mkdir()
         cls.faces = []
         cls.configurations = []
         references = {}
         cls.plain_references = {}
+        cls.wide_references = {}
         for variant in FAMILIES:
             for weight in WEIGHTS:
                 for italic in (False, True):
@@ -75,6 +81,10 @@ class DuoSansTests(unittest.TestCase):
                             add_collision_kerning(font)
                             reduce_spacing(font)
                             add_narrow_numeric_slash(font)
+                            wide_reference = output / "wide-reference" / source.name
+                            font.save(wide_reference)
+                            cls.wide_references[source.name] = wide_reference
+                            narrow_slashes(font)
                             font.save(reference)
                         if italic:
                             plain_reference = output / "plain-reference" / source.name
@@ -84,6 +94,7 @@ class DuoSansTests(unittest.TestCase):
                                 add_collision_kerning(plain_font)
                                 reduce_spacing(plain_font)
                                 add_narrow_numeric_slash(plain_font)
+                                narrow_slashes(plain_font)
                                 plain_font.save(plain_reference)
                             cls.plain_references[source.name] = plain_reference
                         references[source] = reference
@@ -118,6 +129,9 @@ class DuoSansTests(unittest.TestCase):
                     if name == ".ttfautohint":
                         continue
                     expected = advance - SPACING_REDUCTION if advance else 0
+                    if name in SLASH_GLYPHS:
+                        expected -= SLASH_ADVANCE_REDUCTION
+                        left_bearing -= SLASH_ADVANCE_REDUCTION // 2
                     if name in ("f", "f.italic") and path.name.endswith("Italic.ttf"):
                         left_bearing = font["glyf"][name].xMin
                     self.assertEqual(font["hmtx"][name], (expected, left_bearing))
@@ -155,9 +169,10 @@ class DuoSansTests(unittest.TestCase):
                 cmap = font.getBestCmap()
                 for pair, target in targets.items():
                     left, right = (cmap[ord(character)] for character in pair)
+                    compensation = SLASH_ADVANCE_REDUCTION if (left, right) in preserved_slash_pairs(DEFAULT_SOURCE_DIR) else 0
                     self.assertEqual(
                         pair_kerning(lookup, left, right),
-                        target,
+                        target + compensation,
                         pair,
                     )
 
@@ -174,9 +189,12 @@ class DuoSansTests(unittest.TestCase):
                         pair = left + right
                         if pair in targets:
                             continue
+                        compensation = SLASH_ADVANCE_REDUCTION if (
+                            built_cmap[ord(left)], built_cmap[ord(right)]
+                        ) in preserved_slash_pairs(DEFAULT_SOURCE_DIR) else 0
                         self.assertEqual(
                             pair_kerning(built_lookup, built_cmap[ord(left)], built_cmap[ord(right)]),
-                            pair_kerning(source_lookup, source_cmap[ord(left)], source_cmap[ord(right)]),
+                            pair_kerning(source_lookup, source_cmap[ord(left)], source_cmap[ord(right)]) + compensation,
                             pair,
                         )
 
@@ -189,35 +207,73 @@ class DuoSansTests(unittest.TestCase):
             self.assertNotIn(pair, targets)
 
     @requires_harfbuzz
-    def test_slash_is_narrower_only_between_digits(self):
+    def test_slash_keeps_ordinary_spacing_between_digits(self):
+        numeric_pairs = " ".join(f"{left}/{right}" for left in range(10) for right in range(10))
         for path, reference in self.faces:
             with self.subTest(face=path.name), TTFont(path) as font:
                 cmap = font.getBestCmap()
                 slash = cmap[ord("/")]
                 digit = cmap[ord("1")]
-                self.assertEqual(font["hmtx"][slash][0], 580)
+                self.assertEqual(font["hmtx"][slash][0], 500)
+                self.assertEqual(font["hmtx"][cmap[ord("\\")]][0], 500)
                 self.assertEqual(font["hmtx"]["slash.num"][0], 500)
                 self.assertEqual(font["hmtx"][digit][0], 580)
                 for text, expected in (("1/2", 1660), ("12/34", 2820)):
                     shaped = self.shape(path, text)
-                    self.assertIn("slash.num", [glyph["g"] for glyph in shaped])
+                    self.assertIn(slash, [glyph["g"] for glyph in shaped])
+                    self.assertNotIn("slash.num", [glyph["g"] for glyph in shaped])
                     self.assertEqual(sum(glyph["ax"] for glyph in shaped), expected)
+                for features in ("", "calt=0", "pnum=1", "zero=1", "ss09=1", "ss10=1", "ss11=1", "ss20=1"):
+                    with self.subTest(features=features):
+                        shaped = self.shape(path, numeric_pairs, features)
+                        self.assertNotIn("slash.num", [glyph["g"] for glyph in shaped])
+                        self.assertEqual(shaped, self.shape(reference, numeric_pairs, features))
                 for text in ("/g", "a/b", "1/g", "a/2", "1/", "/2"):
                     self.assertEqual(self.shape(path, text), self.shape(reference, text))
-                self.assertEqual(
-                    sum(glyph["ax"] for glyph in self.shape(path, "1/2", "calt=0")),
-                    1740,
-                )
 
     @requires_harfbuzz
     def test_repeated_slashes_and_backslashes_have_matching_spacing(self):
-        expected = 3 * 580 + 2 * collision_targets(DEFAULT_SOURCE_DIR)["//"]
+        expected = 3 * 500 + 2 * collision_targets(DEFAULT_SOURCE_DIR)["//"]
         for path, _ in self.faces:
             with self.subTest(face=path.name):
                 for text in ("///", "\\\\\\"):
                     shaped = self.shape(path, text)
                     self.assertEqual(len(shaped), 3)
                     self.assertEqual(sum(glyph["ax"] for glyph in shaped), expected)
+
+    @requires_harfbuzz
+    def test_narrow_slashes_preserve_existing_kerned_pair_advances(self):
+        preserved = preserved_slash_pairs(DEFAULT_SOURCE_DIR)
+        for path, reference in self.faces:
+            wide_reference = self.wide_references[reference.name]
+            with TTFont(path) as font, TTFont(wide_reference) as wide:
+                lookup = kern_lookup(font)
+                wide_lookup = kern_lookup(wide)
+                for left, right in preserved:
+                    with self.subTest(face=path.name, glyph_pair=(left, right)):
+                        self.assertEqual(
+                            sum(font["hmtx"][name][0] for name in (left, right)) + pair_kerning(lookup, left, right),
+                            sum(wide["hmtx"][name][0] for name in (left, right)) + pair_kerning(wide_lookup, left, right),
+                        )
+                cmap = font.getBestCmap()
+                for slash in ("/", "\\"):
+                    for letter in string.ascii_letters + "éàÖñ":
+                        for text in (slash + letter, letter + slash):
+                            glyph_pair = tuple(cmap[ord(char)] for char in text)
+                            if glyph_pair not in preserved:
+                                continue
+                            with self.subTest(face=path.name, text=text):
+                                self.assertEqual(
+                                    sum(g["ax"] for g in self.shape(path, text, "liga=0")),
+                                    sum(g["ax"] for g in self.shape(wide_reference, text, "liga=0")),
+                                )
+                if path.name.endswith("Italic.ttf"):
+                    for features in ("ss03=1", "ss14=1"):
+                        for text in ("/f", "f/", "\\f", "f\\"):
+                            self.assertEqual(
+                                sum(g["ax"] for g in self.shape(path, text, features)),
+                                sum(g["ax"] for g in self.shape(wide_reference, text, features)),
+                            )
 
     def test_cli_builds_selected_families(self):
         with tempfile.TemporaryDirectory(prefix="recursive-family-selection-") as directory:
@@ -559,6 +615,9 @@ class DuoSansTests(unittest.TestCase):
                 for pair, target in targets.items():
                     with self.subTest(face=path.name, pair=pair):
                         width = sum(font["hmtx"][cmap[ord(c)]][0] for c in pair) + target
+                        glyph_pair = tuple(cmap[ord(c)] for c in pair)
+                        if glyph_pair in preserved_slash_pairs(DEFAULT_SOURCE_DIR):
+                            width += SLASH_ADVANCE_REDUCTION
                         shaped = self.shape(path, pair, "liga=0")
                         self.assertEqual(len(shaped), 2)
                         self.assertEqual(sum(glyph["ax"] for glyph in shaped), width)
@@ -585,7 +644,7 @@ class DuoSansTests(unittest.TestCase):
         for path, _ in self.faces:
             features_list = ("", "ss03=1", "ss14=1") if path.name.endswith("Italic.ttf") else ("",)
             for features in features_list:
-                for text in ("arf", "ari", "afi", "rfi", "fDf", "tef"):
+                for text in ("arf", "ari", "afi", "rfi", "fDf", "tef", "a/b", "f/f", "a\\b"):
                     with self.subTest(face=path.name, features=features, text=text):
                         left = self.shape(path, text[:2], features)
                         right = self.shape(path, text[1:], features)
@@ -647,7 +706,7 @@ class DuoSansTests(unittest.TestCase):
         for _, _, italic, path, _ in self.configurations:
             with self.subTest(face=path.name), TTFont(path) as font:
                 self.assertIn("ttfautohint", font["name"].getDebugName(5))
-                for name in ("slash.num", "f", "f.italic") if italic else ("slash.num",):
+                for name in (*SLASH_GLYPHS, "slash.num", "f", "f.italic") if italic else (*SLASH_GLYPHS, "slash.num"):
                     self.assertGreater(len(font["glyf"][name].program.getBytecode()), 0, name)
 
 
