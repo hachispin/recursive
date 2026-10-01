@@ -422,9 +422,18 @@ class DuoSansTests(unittest.TestCase):
             self.assertEqual(shaped[0]["g"], "f")
 
     def test_italic_f_outlines_and_shared_advances(self):
-        for _, _, italic, path, _ in self.configurations:
+        # Endpoint bounds protect the default bar's optical placement in both
+        # genres at the lightest and heaviest retained weights.
+        swash_bar_bounds = {
+            ("linear", 300): (81, 419),
+            ("linear", 800): (48, 435),
+            ("casual", 300): (55, 387),
+            ("casual", 800): (47, 426),
+        }
+        for variant, weight, italic, path, _ in self.configurations:
             if not italic:
                 continue
+            voice = "linear" if variant == "linear" else "casual"
             with self.subTest(face=path.name), TTFont(path) as font:
                 source = TTFont(DEFAULT_SOURCE_DIR / SOURCE_FILES[
                     "casual" if path.name.startswith(("RecursiveDuo", "RecursiveCasual")) else "linear"
@@ -436,6 +445,12 @@ class DuoSansTests(unittest.TestCase):
                         start = 0 if bar_contour == 0 else glyph.endPtsOfContours[0] + 1
                         end = glyph.endPtsOfContours[bar_contour] + 1
                         bar_ys = [y for _, y in glyph.coordinates[start:end]]
+                        if name == "f" and (voice, weight) in swash_bar_bounds:
+                            bar_xs = [x for x, _ in glyph.coordinates[start:end]]
+                            self.assertEqual(
+                                (min(bar_xs), max(bar_xs)),
+                                swash_bar_bounds[voice, weight],
+                            )
                         self.assertLessEqual(
                             abs((min(bar_ys) + max(bar_ys)) / 2 - plain_f_bar_center(source)),
                             1,

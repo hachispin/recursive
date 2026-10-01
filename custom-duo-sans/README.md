@@ -20,7 +20,8 @@ are baked into the base glyphs, rather than depending on an application to
 activate the `rvrn` OpenType feature.
 
 Italic `f` uses Recursive's swash outline with a plain angled top terminal and
-a slightly longer right crossbar. Enable **`ss03` (Long descender f)** for the
+a slightly longer right crossbar, shifted 16 units right for optical balance.
+Enable **`ss03` (Long descender f)** for the
 archived non-swash long form (`f.italic`), or **`ss14` (Original italic f)** for
 the former plain form (`f.simple`). Linear and Casual italics use their matching
 slanted A/B/C masters, interpolated for each static weight. All three crossbars

@@ -167,6 +167,7 @@ SWASH_F_TOP = {
     },
 }
 SWASH_F_BAR_EXTENSION = 16
+SWASH_F_BAR_SHIFT = 16
 
 # The shared fi/fj advances are tight enough for the default swash and roman f.
 # Keep the archived long f's ink clearance with placement on its follower;
@@ -292,7 +293,9 @@ def aligned_f_glyph(voice: str, weight: int, swash: bool, target_bar_center: flo
     contour = 0
     for command, points in interpolated:
         if contour == bar_contour:
-            points = tuple((x, y + bar_shift) for x, y in points)
+            # Balance the default swash f's bar around its slanted stem.
+            horizontal_shift = SWASH_F_BAR_SHIFT if swash else 0
+            points = tuple((x + horizontal_shift, y + bar_shift) for x, y in points)
         getattr(quadratic, command)(*points)
         if command == "closePath":
             contour += 1
