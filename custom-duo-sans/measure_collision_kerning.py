@@ -120,7 +120,7 @@ def measure(source_dir: Path, font_dir: Path, margin: int, verify: bool = False)
                                 for left_form in left_forms:
                                     left_ink = alternate_masks.get(left_form, masks[left])
                                     placement = ITALIC_F_FOLLOWER_PLACEMENT.get(left_form, {}).get(pair, 0)
-                                    if italic and pair == "te":
+                                    if italic and pair in ("te", "el"):
                                         placement -= SPACING_REDUCTION
                                     for right_form in right_forms:
                                         right_ink = alternate_masks.get(right_form, masks[right])

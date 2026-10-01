@@ -44,6 +44,10 @@ the pair look tighter without changing its total advance width. The exception
 includes accented `t` forms but excludes the unrelated `pi` glyph from the
 source kerning class. Roman `te` spacing remains unchanged.
 
+Italic faces also move `l` and its accented forms 20 units left after `e`
+and its accented forms. This tightens `el` without changing its total advance
+or the spacing of upright faces; `ae` and `oe` ligatures are excluded.
+
 The 20-unit spacing reduction can make some ASCII pairs collide. The builds
 retain upstream GPOS kerning except where the final outlines need more room.
 A few pairs previously corrected for collisions still need a shared width

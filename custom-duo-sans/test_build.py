@@ -21,6 +21,7 @@ from build import (
     SPACING_REDUCTION,
     WEIGHTS,
     add_collision_kerning,
+    add_italic_el_kerning,
     add_italic_te_kerning,
     build_face,
     collision_targets,
@@ -70,6 +71,7 @@ class DuoSansTests(unittest.TestCase):
                                 voice = "casual" if "Csl" in source.name else "linear"
                                 configure_italic_f_outlines(font, voice, weight)
                                 add_italic_te_kerning(font)
+                                add_italic_el_kerning(font)
                             add_collision_kerning(font)
                             reduce_spacing(font)
                             add_narrow_numeric_slash(font)
@@ -78,6 +80,7 @@ class DuoSansTests(unittest.TestCase):
                             plain_reference = output / "plain-reference" / source.name
                             with TTFont(source) as plain_font:
                                 add_italic_te_kerning(plain_font)
+                                add_italic_el_kerning(plain_font)
                                 add_collision_kerning(plain_font)
                                 reduce_spacing(plain_font)
                                 add_narrow_numeric_slash(plain_font)
@@ -451,6 +454,29 @@ class DuoSansTests(unittest.TestCase):
                 ]
                 with self.subTest(variant=variant, weight=weight):
                     self.assertEqual(widths, [widths[0], widths[0]])
+
+    @requires_harfbuzz
+    def test_italic_el_tightening_preserves_advance(self):
+        pairs = ("el", "él", "ẹḷ", "eł", "ěl")
+        for _, _, italic, path, _ in self.configurations:
+            for pair in pairs:
+                with self.subTest(face=path.name, pair=pair):
+                    shaped = self.shape(path, pair)
+                    unkerned = self.shape(path, pair, "kern=0")
+                    self.assertEqual(sum(g["ax"] for g in shaped), sum(g["ax"] for g in unkerned))
+                    self.assertEqual(shaped[1]["dx"] - unkerned[1]["dx"], -20 if italic else 0)
+            for pair in ("æl", "eh"):
+                with self.subTest(face=path.name, pair=pair):
+                    self.assertEqual(self.shape(path, pair), self.shape(path, pair, "kern=0"))
+
+        for weight in WEIGHTS:
+            widths = [
+                sum(g["ax"] for g in self.shape(path, "el"))
+                for variant, face_weight, _, path, _ in self.configurations
+                if face_weight == weight
+            ]
+            with self.subTest(weight=weight):
+                self.assertEqual(widths, [widths[0]] * len(widths))
 
     @requires_harfbuzz
     def test_both_f_forms_preserve_accent_positioning(self):

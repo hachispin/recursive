@@ -429,6 +429,42 @@ def add_italic_te_kerning(font: TTFont) -> None:
     append_kern_pair_lookup(font, pairs)
 
 
+def add_italic_el_kerning(font: TTFont) -> None:
+    """Move italic l toward e while retaining the pair's advance width."""
+    lookup = kern_lookup(font)
+    class_subtables = []
+    for subtable in lookup.SubTable:
+        if subtable.Format != 2 or "e" not in subtable.Coverage.glyphs:
+            continue
+        left_class = subtable.ClassDef1.classDefs.get("e", 0)
+        right_class = subtable.ClassDef2.classDefs.get("l", 0)
+        value = subtable.Class1Record[left_class].Class2Record[right_class].Value1
+        if value is None or (getattr(value, "XAdvance", 0) or 0) != 0:
+            raise ValueError("The italic e-l class pair is no longer unkerned")
+        class_subtables.append((subtable, left_class, right_class))
+    if len(class_subtables) != 1:
+        raise ValueError("Expected exactly one italic e-l class pair")
+
+    subtable, left_class, right_class = class_subtables[0]
+    left_glyphs = {
+        name for name in subtable.Coverage.glyphs
+        if subtable.ClassDef1.classDefs.get(name, 0) == left_class
+        and name not in {"ae", "aeacute", "oe"}
+    }
+    l_forms = {"l", "lacute", "uni013C", "uni1E37", "uni1E3B", "lslash"}
+    right_glyphs = {
+        name for name in l_forms
+        if subtable.ClassDef2.classDefs.get(name, 0) == right_class
+    }
+    if "e" not in left_glyphs or right_glyphs != l_forms:
+        raise ValueError("Unexpected italic e-l kerning classes")
+    adjustment = buildValue({"XPlacement": -SPACING_REDUCTION})
+    append_kern_pair_lookup(font, {
+        (left, right): (None, adjustment)
+        for left in left_glyphs for right in right_glyphs
+    })
+
+
 def kern_lookup(font: TTFont):
     """Find the original advance kerning lookup, ahead of added placement lookups."""
     gpos = font["GPOS"].table
@@ -700,6 +736,7 @@ def build_face(
         configure_italic_f_outlines(font, voice, weight)
         configure_italic_f(font)
         add_italic_te_kerning(font)
+        add_italic_el_kerning(font)
     add_collision_kerning(font, source_dir)
     reduce_spacing(font)
     add_narrow_numeric_slash(font)
